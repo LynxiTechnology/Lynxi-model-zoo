@@ -127,3 +127,14 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# model files
+*.onnx
+*.pb
+*.pth
+*.pt
+
+*convert_out
+*.bin
+
+*.code-workspace
