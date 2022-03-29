@@ -1,0 +1,89 @@
+From e5c3b0df5cefe1df5955821064707624cd0ddec5 Mon Sep 17 00:00:00 2001
+From: Huangfei Xiao <huangfei.xiao@lynxi.com>
+Date: Tue, 29 Mar 2022 15:39:05 +0800
+Subject: [PATCH] convert 5D to 4D and remove unused output
+
+can't support 5D right now
+remove unused output to reduce size
+---
+ models/yolo.py | 51 ++++++++++++++++++++++++++++++++++++++++-----------
+ 1 file changed, 40 insertions(+), 11 deletions(-)
+
+diff --git a/models/yolo.py b/models/yolo.py
+index 497a0e9..2fca5db 100644
+--- a/models/yolo.py
++++ b/models/yolo.py
+@@ -54,30 +54,59 @@ class Detect(nn.Module):
+         for i in range(self.nl):
+             x[i] = self.m[i](x[i])  # conv
+             bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
+-            x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
+ 
+             if not self.training:  # inference
+-                if self.grid[i].shape[2:4] != x[i].shape[2:4] or self.onnx_dynamic:
+-                    self.grid[i], self.anchor_grid[i] = self._make_grid(nx, ny, i)
++                ### 5 dims -> 4 dims
++                # original:
++                #  (bs, self.na, self.no, ny, nx) -> (bs, self.na, ny, nx, self.no)
++                # modified:
++                #  (bs * self.na, self.no, ny, nx)
++                #   -> (bs * self.na, ny, nx, self.no)
++                #   --> (bs, self.na, ny, nx, self.no)
++                x[i] = x[i].view(bs * self.na, self.no, ny, nx).permute(0, 2, 3, 1).contiguous()
++
++                self_grid, self_anchor_grid = self._make_grid(nx, ny, i)
++
++                ### 5 dims -> 4 dims
++                # [1, 3, 80, 80, 2] broadcast tensor, manual expand to [bs * 3, 80, 80, 2]
++                # print(self_grid.shape, self_anchor_grid.shape)
++                grid_temp = []
++                anchor_grid_temp = []
++                for _ in range(bs):
++                    grid_temp.append(self_grid)
++                    anchor_grid_temp.append(self_anchor_grid)
++                self_grid = torch.cat(grid_temp, 0)
++                self_anchor_grid = torch.cat(anchor_grid_temp, 0)
++                # print(self_grid.shape, self_anchor_grid.shape)
+ 
+                 y = x[i].sigmoid()
+-                if self.inplace:
+-                    y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 + self.grid[i]) * self.stride[i]  # xy
+-                    y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
++                ### can't use inplace
++                if False and self.inplace:
++                    y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 + self_grid) * self.stride[i]  # xy
++                    y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self_anchor_grid  # wh
+                 else:  # for YOLOv5 on AWS Inferentia https://github.com/ultralytics/yolov5/pull/2953
+-                    xy = (y[..., 0:2] * 2. - 0.5 + self.grid[i]) * self.stride[i]  # xy
+-                    wh = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
++                    xy = (y[..., 0:2] * 2. - 0.5 + self_grid) * self.stride[i]  # xy
++                    wh = (y[..., 2:4] * 2) ** 2 * self_anchor_grid  # wh
+                     y = torch.cat((xy, wh, y[..., 4:]), -1)
+                 z.append(y.view(bs, -1, self.no))
++            else:
++                x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
+ 
+-        return x if self.training else (torch.cat(z, 1), x)
++        ### remove unused x to reduce output size
++        return x if self.training else torch.cat(z, 1)
+ 
+     def _make_grid(self, nx=20, ny=20, i=0):
+         d = self.anchors[i].device
+         yv, xv = torch.meshgrid([torch.arange(ny).to(d), torch.arange(nx).to(d)])
+-        grid = torch.stack((xv, yv), 2).expand((1, self.na, ny, nx, 2)).float()
++
++        #>>> lyngor bug, will restore later
++        xv = xv.reshape(ny, nx, 1)
++        yv = yv.reshape(ny, nx, 1)
++        grid = torch.cat((xv, yv), 2).expand((self.na, ny, nx, 2)).float()
++        #<<< lyngor bug, will restore later
+         anchor_grid = (self.anchors[i].clone() * self.stride[i]) \
+-            .view((1, self.na, 1, 1, 2)).expand((1, self.na, ny, nx, 2)).float()
++            .view((self.na, 1, 1, 2)).expand((self.na, ny, nx, 2)).float()
++
+         return grid, anchor_grid
+ 
+ 
+-- 
+2.7.4
+
