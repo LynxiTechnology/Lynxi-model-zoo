@@ -4,13 +4,7 @@ echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@"
 echo ">准备环境，如失败请手动下载<"
 echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@"
 
-cur_dir=$(pwd)
-
-source_url="https://github.com/ultralytics/yolov5.git"
-source_dir="$cur_dir/yolov5"
-model_url="https://github.com/ultralytics/yolov5/releases/download/v6.0/yolov5s.pt"
-model_file="yolov5s.pt"
-golden_dir="$cur_dir/golden"
+source setting.cfg
 
 if [ ! -f "$model_file" ]; then
     wget $model_url
@@ -26,13 +20,17 @@ if [ ! -d "$source_dir" ]; then
     # fixed torch 1.7.0 at first
     pip install torch==1.7.0 torchvision
     pip install -r requirements.txt
-
-    # generate golden before patch
-    export PYTHONPATH=$source_dir:$PYTHONPATH
-    cd $golden_dir && python3 generate.py && cd -
-
-    # apply patch
-    git am ../patch/*.patch
-    cd $cur_dir
 fi
 
+
+cd $source_dir
+# support v6.0
+git checkout v6.0
+
+# generate golden before patch
+export PYTHONPATH=$source_dir:$PYTHONPATH
+cd $golden_dir && python3 generate.py $model_file $input_shapes && cd -
+
+# apply patch
+git am ../patch/*.patch
+cd $cur_dir

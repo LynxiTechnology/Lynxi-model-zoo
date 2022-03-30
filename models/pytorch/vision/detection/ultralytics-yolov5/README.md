@@ -6,11 +6,13 @@
 
 ## 支持列表
 - [x] yolov5s @640x640
-- [x] yolov5m @640x640
+- [ ] yolov5m @640x640
 - [ ] yolov5l @640x640
 - [ ] yolov5x @640x640
 
 ## 用法
+
+有需要可以调整setting.cfg的配置，然后运行以下命令
 
 ```shell
    1_prepare.sh
