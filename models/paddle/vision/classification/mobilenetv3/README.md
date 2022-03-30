@@ -2,6 +2,8 @@
 
 ## 用法
 
+有需要可以调整setting.cfg，再执行以下脚本
+
 ```shell
    1_prepare.sh
    2_convert.sh
