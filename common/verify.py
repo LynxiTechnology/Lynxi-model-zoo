@@ -2,6 +2,20 @@ import sys
 import numpy as np
 import lynpy
 
+def lyn_loss(golden, sample):
+    # return np.sqrt(
+    #             np.sum( (np.float32(sample)-np.float32(golden))**2 ) \
+    #             / np.sum( np.float32(golden)**2 )
+    #         )
+
+    # mean absolute error rate
+    return np.mean(
+                np.abs(
+                    (np.float32(sample)-np.float32(golden)) \
+                    / np.float32(golden)
+                )
+            )
+
 def mse_loss(golden, sample):
     return ((np.float32(sample)-np.float32(golden))**2).mean()
 
@@ -18,9 +32,9 @@ def run(model_path, golden_in, golden_out, numpy_dtype):
     sample = infer(model_path, test_data)
 
     sample.dtype = np.dtype(numpy_dtype)
-    loss = mse_loss(golden, sample)
+    loss = lyn_loss(golden, sample)
 
-    print(f'=======test pass, loss({loss})=======')
+    print(f'=======test done, loss({loss})=======')
 
 
 argc = len(sys.argv)
