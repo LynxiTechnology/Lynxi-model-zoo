@@ -1,0 +1,335 @@
+From 66e366841c853403d7eadb5d5126ff620d485921 Mon Sep 17 00:00:00 2001
+From: Huangfei Xiao <huangfei.xiao@lynxi.com>
+Date: Tue, 29 Mar 2022 15:39:05 +0800
+Subject: [PATCH] support compile to lynxi model
+
+patch modifies:
+a. can't support 5D operators, convert 5D to 4D
+b. remove unused output to reduce size
+c. add lyndetect.py for demo
+---
+ lyndetect.py   | 236 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ models/yolo.py |  51 ++++++++++---
+ 2 files changed, 276 insertions(+), 11 deletions(-)
+ create mode 100644 lyndetect.py
+
+diff --git a/lyndetect.py b/lyndetect.py
+new file mode 100644
+index 0000000..d1730aa
+--- /dev/null
++++ b/lyndetect.py
+@@ -0,0 +1,236 @@
++# YOLOv5 🚀 by Ultralytics, GPL-3.0 license
++"""
++Run inference on images, videos, directories, streams, etc.
++
++Usage:
++    $ python path/to/detect.py --source path/to/img.jpg --weights yolov5s.pt --img 640
++"""
++
++import argparse
++import os
++import sys
++from pathlib import Path
++
++import cv2
++import numpy as np
++import torch
++import torch.backends.cudnn as cudnn
++
++FILE = Path(__file__).resolve()
++ROOT = FILE.parents[0]  # YOLOv5 root directory
++if str(ROOT) not in sys.path:
++    sys.path.append(str(ROOT))  # add ROOT to PATH
++ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
++
++from models.experimental import attempt_load
++from utils.datasets import LoadImages, LoadStreams
++from utils.general import check_img_size, check_imshow, check_requirements, colorstr, \
++    increment_path, non_max_suppression, print_args, save_one_box, scale_coords, set_logging, \
++    strip_optimizer, xyxy2xywh
++from utils.plots import Annotator, colors
++from utils.torch_utils import time_sync
++
++import lynpy
++
++@torch.no_grad()
++def run(weights=ROOT / 'build_model/Net_0',  # model.pt path(s)
++        source=ROOT / 'data/images',  # file/dir/URL/glob, 0 for webcam
++        imgsz=640,  # inference size (pixels)
++        conf_thres=0.25,  # confidence threshold
++        iou_thres=0.45,  # NMS IOU threshold
++        max_det=1000,  # maximum detections per image
++        device='',  # cuda device, i.e. 0 or 0,1,2,3 or cpu
++        view_img=False,  # show results
++        save_txt=False,  # save results to *.txt
++        save_conf=False,  # save confidences in --save-txt labels
++        save_crop=False,  # save cropped prediction boxes
++        nosave=False,  # do not save images/videos
++        classes=None,  # filter by class: --class 0, or --class 0 2 3
++        agnostic_nms=False,  # class-agnostic NMS
++        augment=False,  # augmented inference
++        visualize=False,  # visualize features
++        update=False,  # update all models
++        project=ROOT / 'runs/detect',  # save results to project/name
++        name='exp',  # save results to project/name
++        exist_ok=False,  # existing project/name ok, do not increment
++        line_thickness=3,  # bounding box thickness (pixels)
++        hide_labels=False,  # hide labels
++        hide_conf=False,  # hide confidences
++        half=False,  # use FP16 half-precision inference
++        dnn=False,  # use OpenCV DNN for ONNX inference
++        ):
++    source = str(source)
++    save_img = not nosave and not source.endswith('.txt')  # save inference images
++    webcam = source.isnumeric() or source.endswith('.txt') or source.lower().startswith(
++        ('rtsp://', 'rtmp://', 'http://', 'https://'))
++
++    # Directories
++    save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
++    (save_dir / 'labels' if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
++
++    # Initialize
++    set_logging()
++
++    # Load model
++    lyn_model = lynpy.Model(path=weights[0])
++
++    stride, names = 64, [f'class{i}' for i in range(1000)]  # assign defaults
++    imgsz = check_img_size(imgsz, s=stride)  # check image size
++
++    # Dataloader
++    if webcam:
++        view_img = check_imshow()
++        cudnn.benchmark = True  # set True to speed up constant image size inference
++        dataset = LoadStreams(source, img_size=imgsz, stride=stride, auto=False)
++        bs = len(dataset)  # batch_size
++    else:
++        dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=False)
++        bs = 1  # batch_size
++    vid_path, vid_writer = [None] * bs, [None] * bs
++
++    # Run inference
++    dt, seen = [0.0, 0.0, 0.0], 0
++    for path, img, im0s, vid_cap in dataset:
++        t1 = time_sync()
++        if True: #onnx:
++            img = img.astype('float32')
++        else:
++            img = torch.from_numpy(img).to(device)
++            img = img.half() if half else img.float()  # uint8 to fp16/32
++        img = img / 255.0  # 0 - 255 to 0.0 - 1.0
++        if len(img.shape) == 3:
++            img = img[None]  # expand for batch dim
++        t2 = time_sync()
++        dt[0] += t2 - t1
++
++        # Inference
++        lyn_in = lyn_model.input_tensor().from_numpy(img).apu()
++        lyn_model(lyn_in) #.cpu().view_as(shape=pred.shape)
++        lyn_out = lyn_model.output_list()[0][0].cpu()
++        pred = torch.from_numpy(lyn_out.numpy())
++
++        t3 = time_sync()
++        dt[1] += t3 - t2
++
++        # NMS
++        pred = non_max_suppression(pred, conf_thres, iou_thres, classes, agnostic_nms, max_det=max_det)
++        dt[2] += time_sync() - t3
++
++        # Process predictions
++        for i, det in enumerate(pred):  # per image
++            seen += 1
++            if webcam:  # batch_size >= 1
++                p, s, im0, frame = path[i], f'{i}: ', im0s[i].copy(), dataset.count
++            else:
++                p, s, im0, frame = path, '', im0s.copy(), getattr(dataset, 'frame', 0)
++
++            p = Path(p)  # to Path
++            save_path = str(save_dir / p.name)  # img.jpg
++            txt_path = str(save_dir / 'labels' / p.stem) + ('' if dataset.mode == 'image' else f'_{frame}')  # img.txt
++            s += '%gx%g ' % img.shape[2:]  # print string
++            gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
++            imc = im0.copy() if save_crop else im0  # for save_crop
++            annotator = Annotator(im0, line_width=line_thickness, example=str(names))
++            if len(det):
++                # Rescale boxes from img_size to im0 size
++                det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
++
++                # Print results
++                for c in det[:, -1].unique():
++                    n = (det[:, -1] == c).sum()  # detections per class
++                    s += f"{n} {names[int(c)]}{'s' * (n > 1)}, "  # add to string
++
++                # Write results
++                for *xyxy, conf, cls in reversed(det):
++                    if save_txt:  # Write to file
++                        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
++                        line = (cls, *xywh, conf) if save_conf else (cls, *xywh)  # label format
++                        with open(txt_path + '.txt', 'a') as f:
++                            f.write(('%g ' * len(line)).rstrip() % line + '\n')
++
++                    if save_img or save_crop or view_img:  # Add bbox to image
++                        c = int(cls)  # integer class
++                        label = None if hide_labels else (names[c] if hide_conf else f'{names[c]} {conf:.2f}')
++                        annotator.box_label(xyxy, label, color=colors(c, True))
++                        if save_crop:
++                            save_one_box(xyxy, imc, file=save_dir / 'crops' / names[c] / f'{p.stem}.jpg', BGR=True)
++
++            # Print time (inference-only)
++            print(f'{s}Done. ({t3 - t2:.3f}s)')
++
++            # Stream results
++            im0 = annotator.result()
++            if view_img:
++                cv2.imshow(str(p), im0)
++                cv2.waitKey(1)  # 1 millisecond
++
++            # Save results (image with detections)
++            if save_img:
++                if dataset.mode == 'image':
++                    cv2.imwrite(save_path, im0)
++                else:  # 'video' or 'stream'
++                    if vid_path[i] != save_path:  # new video
++                        vid_path[i] = save_path
++                        if isinstance(vid_writer[i], cv2.VideoWriter):
++                            vid_writer[i].release()  # release previous video writer
++                        if vid_cap:  # video
++                            fps = vid_cap.get(cv2.CAP_PROP_FPS)
++                            w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
++                            h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
++                        else:  # stream
++                            fps, w, h = 30, im0.shape[1], im0.shape[0]
++                            save_path += '.mp4'
++                        vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
++                    vid_writer[i].write(im0)
++
++    # Print results
++    t = tuple(x / seen * 1E3 for x in dt)  # speeds per image
++    print(f'Speed: %.1fms pre-process, %.1fms inference, %.1fms NMS per image at shape {(1, 3, *imgsz)}' % t)
++    if save_txt or save_img:
++        s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ''
++        print(f"Results saved to {colorstr('bold', save_dir)}{s}")
++    if update:
++        strip_optimizer(weights)  # update model (to fix SourceChangeWarning)
++
++
++def parse_opt():
++    parser = argparse.ArgumentParser()
++    parser.add_argument('--weights', nargs='+', type=str, default=ROOT / 'build_model/Net_0', help='model path(s)')
++    parser.add_argument('--source', type=str, default=ROOT / 'data/images', help='file/dir/URL/glob, 0 for webcam')
++    parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
++    parser.add_argument('--conf-thres', type=float, default=0.25, help='confidence threshold')
++    parser.add_argument('--iou-thres', type=float, default=0.45, help='NMS IoU threshold')
++    parser.add_argument('--max-det', type=int, default=1000, help='maximum detections per image')
++    parser.add_argument('--device', default='cpu', help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
++    parser.add_argument('--view-img', action='store_true', help='show results')
++    parser.add_argument('--save-txt', action='store_true', help='save results to *.txt')
++    parser.add_argument('--save-conf', action='store_true', help='save confidences in --save-txt labels')
++    parser.add_argument('--save-crop', action='store_true', help='save cropped prediction boxes')
++    parser.add_argument('--nosave', action='store_true', help='do not save images/videos')
++    parser.add_argument('--classes', nargs='+', type=int, help='filter by class: --classes 0, or --classes 0 2 3')
++    parser.add_argument('--agnostic-nms', action='store_true', help='class-agnostic NMS')
++    parser.add_argument('--augment', action='store_true', help='augmented inference')
++    parser.add_argument('--visualize', action='store_true', help='visualize features')
++    parser.add_argument('--update', action='store_true', help='update all models')
++    parser.add_argument('--project', default=ROOT / 'runs/detect', help='save results to project/name')
++    parser.add_argument('--name', default='exp', help='save results to project/name')
++    parser.add_argument('--exist-ok', action='store_true', help='existing project/name ok, do not increment')
++    parser.add_argument('--line-thickness', default=3, type=int, help='bounding box thickness (pixels)')
++    parser.add_argument('--hide-labels', default=False, action='store_true', help='hide labels')
++    parser.add_argument('--hide-conf', default=False, action='store_true', help='hide confidences')
++    parser.add_argument('--half', action='store_true', help='use FP16 half-precision inference')
++    parser.add_argument('--dnn', action='store_true', help='use OpenCV DNN for ONNX inference')
++    opt = parser.parse_args()
++    opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand
++    print_args(FILE.stem, opt)
++    return opt
++
++
++def main(opt):
++    check_requirements(exclude=('tensorboard', 'thop'))
++    run(**vars(opt))
++
++
++if __name__ == "__main__":
++    opt = parse_opt()
++    main(opt)
+diff --git a/models/yolo.py b/models/yolo.py
+index 497a0e9..2fca5db 100644
+--- a/models/yolo.py
++++ b/models/yolo.py
+@@ -54,30 +54,59 @@ class Detect(nn.Module):
+         for i in range(self.nl):
+             x[i] = self.m[i](x[i])  # conv
+             bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
+-            x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
+ 
+             if not self.training:  # inference
+-                if self.grid[i].shape[2:4] != x[i].shape[2:4] or self.onnx_dynamic:
+-                    self.grid[i], self.anchor_grid[i] = self._make_grid(nx, ny, i)
++                ### 5 dims -> 4 dims
++                # original:
++                #  (bs, self.na, self.no, ny, nx) -> (bs, self.na, ny, nx, self.no)
++                # modified:
++                #  (bs * self.na, self.no, ny, nx)
++                #   -> (bs * self.na, ny, nx, self.no)
++                #   --> (bs, self.na, ny, nx, self.no)
++                x[i] = x[i].view(bs * self.na, self.no, ny, nx).permute(0, 2, 3, 1).contiguous()
++
++                self_grid, self_anchor_grid = self._make_grid(nx, ny, i)
++
++                ### 5 dims -> 4 dims
++                # [1, 3, 80, 80, 2] broadcast tensor, manual expand to [bs * 3, 80, 80, 2]
++                # print(self_grid.shape, self_anchor_grid.shape)
++                grid_temp = []
++                anchor_grid_temp = []
++                for _ in range(bs):
++                    grid_temp.append(self_grid)
++                    anchor_grid_temp.append(self_anchor_grid)
++                self_grid = torch.cat(grid_temp, 0)
++                self_anchor_grid = torch.cat(anchor_grid_temp, 0)
++                # print(self_grid.shape, self_anchor_grid.shape)
+ 
+                 y = x[i].sigmoid()
+-                if self.inplace:
+-                    y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 + self.grid[i]) * self.stride[i]  # xy
+-                    y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
++                ### can't use inplace
++                if False and self.inplace:
++                    y[..., 0:2] = (y[..., 0:2] * 2. - 0.5 + self_grid) * self.stride[i]  # xy
++                    y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self_anchor_grid  # wh
+                 else:  # for YOLOv5 on AWS Inferentia https://github.com/ultralytics/yolov5/pull/2953
+-                    xy = (y[..., 0:2] * 2. - 0.5 + self.grid[i]) * self.stride[i]  # xy
+-                    wh = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
++                    xy = (y[..., 0:2] * 2. - 0.5 + self_grid) * self.stride[i]  # xy
++                    wh = (y[..., 2:4] * 2) ** 2 * self_anchor_grid  # wh
+                     y = torch.cat((xy, wh, y[..., 4:]), -1)
+                 z.append(y.view(bs, -1, self.no))
++            else:
++                x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
+ 
+-        return x if self.training else (torch.cat(z, 1), x)
++        ### remove unused x to reduce output size
++        return x if self.training else torch.cat(z, 1)
+ 
+     def _make_grid(self, nx=20, ny=20, i=0):
+         d = self.anchors[i].device
+         yv, xv = torch.meshgrid([torch.arange(ny).to(d), torch.arange(nx).to(d)])
+-        grid = torch.stack((xv, yv), 2).expand((1, self.na, ny, nx, 2)).float()
++
++        #>>> lyngor bug, will restore later
++        xv = xv.reshape(ny, nx, 1)
++        yv = yv.reshape(ny, nx, 1)
++        grid = torch.cat((xv, yv), 2).expand((self.na, ny, nx, 2)).float()
++        #<<< lyngor bug, will restore later
+         anchor_grid = (self.anchors[i].clone() * self.stride[i]) \
+-            .view((1, self.na, 1, 1, 2)).expand((1, self.na, ny, nx, 2)).float()
++            .view((self.na, 1, 1, 2)).expand((self.na, ny, nx, 2)).float()
++
+         return grid, anchor_grid
+ 
+ 
+-- 
+2.7.4
+

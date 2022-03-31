@@ -30,6 +30,7 @@ git checkout v6.0
 # generate golden before patch
 export PYTHONPATH=$source_dir:$PYTHONPATH
 cd $golden_dir && python3 generate.py $model_file $input_shapes && cd -
+python3 $source_dir/detect.py --weights $model_file --project $golden_dir
 
 # apply patch
 git am ../patch/*.patch
