@@ -3,21 +3,10 @@ import numpy as np
 import lynpy
 
 def lyn_loss(golden, sample):
-    # return np.sqrt(
-    #             np.sum( (np.float32(sample)-np.float32(golden))**2 ) \
-    #             / np.sum( np.float32(golden)**2 )
-    #         )
-
-    # mean absolute error rate
-    return np.mean(
-                np.abs(
-                    (np.float32(sample)-np.float32(golden)) \
-                    / np.float32(golden)
-                )
+    return np.sqrt(
+                np.sum( (np.float32(sample)-np.float32(golden))**2 ) \
+                / np.sum( np.float32(golden)**2 )
             )
-
-def mse_loss(golden, sample):
-    return ((np.float32(sample)-np.float32(golden))**2).mean()
 
 def infer(model_path, data):
     model = lynpy.Model(path=model_path)
