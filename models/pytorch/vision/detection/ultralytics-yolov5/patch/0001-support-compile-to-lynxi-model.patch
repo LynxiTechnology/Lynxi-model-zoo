@@ -1,4 +1,4 @@
-From 66e366841c853403d7eadb5d5126ff620d485921 Mon Sep 17 00:00:00 2001
+From 12e04fa44602b128b75879319960a90bc3d6d9f1 Mon Sep 17 00:00:00 2001
 From: Huangfei Xiao <huangfei.xiao@lynxi.com>
 Date: Tue, 29 Mar 2022 15:39:05 +0800
 Subject: [PATCH] support compile to lynxi model
@@ -9,8 +9,8 @@ b. remove unused output to reduce size
 c. add lyndetect.py for demo
 ---
  lyndetect.py   | 236 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- models/yolo.py |  51 ++++++++++---
- 2 files changed, 276 insertions(+), 11 deletions(-)
+ models/yolo.py |  46 ++++++++---
+ 2 files changed, 271 insertions(+), 11 deletions(-)
  create mode 100644 lyndetect.py
 
 diff --git a/lyndetect.py b/lyndetect.py
@@ -256,10 +256,10 @@ index 0000000..d1730aa
 +    opt = parse_opt()
 +    main(opt)
 diff --git a/models/yolo.py b/models/yolo.py
-index 497a0e9..2fca5db 100644
+index 497a0e9..2dc4e38 100644
 --- a/models/yolo.py
 +++ b/models/yolo.py
-@@ -54,30 +54,59 @@ class Detect(nn.Module):
+@@ -54,30 +54,54 @@ class Detect(nn.Module):
          for i in range(self.nl):
              x[i] = self.m[i](x[i])  # conv
              bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
@@ -282,13 +282,8 @@ index 497a0e9..2fca5db 100644
 +                ### 5 dims -> 4 dims
 +                # [1, 3, 80, 80, 2] broadcast tensor, manual expand to [bs * 3, 80, 80, 2]
 +                # print(self_grid.shape, self_anchor_grid.shape)
-+                grid_temp = []
-+                anchor_grid_temp = []
-+                for _ in range(bs):
-+                    grid_temp.append(self_grid)
-+                    anchor_grid_temp.append(self_anchor_grid)
-+                self_grid = torch.cat(grid_temp, 0)
-+                self_anchor_grid = torch.cat(anchor_grid_temp, 0)
++                self_grid = self_grid.repeat(bs, 1, 1, 1)
++                self_anchor_grid = self_anchor_grid.repeat(bs, 1, 1, 1)
 +                # print(self_grid.shape, self_anchor_grid.shape)
  
                  y = x[i].sigmoid()
