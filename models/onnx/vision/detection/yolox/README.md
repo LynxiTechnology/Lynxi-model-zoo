@@ -1,8 +1,8 @@
-# ultralytics-yolov5
+# YOLOX
 
-模型来源：http://192.168.53.225/fae/lyn_yolox/-/tree/master/demo/ONNXRuntime
+模型来源：https://github.com/Megvii-BaseDetection/YOLOX/tree/main/demo/ONNXRuntime
 
-发行版本：main
+发行版本：0.1.1rc0
 
 ## 支持列表
 - [x] YOLOX-s @640x640
