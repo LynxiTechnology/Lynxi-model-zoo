@@ -29,4 +29,4 @@ pip install lyngor-x.x.x.x-cp36-cp36m-linux_x86_64.whl
 
 ## 测试
 
-请参考子目录下的说明进行
+请参考子目录下的说明进行测试
