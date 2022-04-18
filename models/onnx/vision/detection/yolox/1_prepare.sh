@@ -17,6 +17,8 @@ if [ ! -d "$source_dir" ]; then
     # fixed torch 1.7.0 at first
     pip install torch==1.7.0 torchvision
     pip install -r requirements.txt
+    pip install opencv-python
+
 fi
 
 cd $source_dir
