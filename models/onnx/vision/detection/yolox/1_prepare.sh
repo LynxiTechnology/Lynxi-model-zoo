@@ -1,0 +1,32 @@
+#!/bin/bash
+
+echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+echo ">准备环境，如失败请手动下载<"
+echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@"
+
+source setting.cfg
+
+if [ ! -f "$model_file" ]; then
+    wget $model_url
+fi
+
+if [ ! -d "$source_dir" ]; then
+    git clone $source_url
+    cd $source_dir
+
+    # fixed torch 1.7.0 at first
+    pip install torch==1.7.0 torchvision
+    pip install -r requirements.txt
+fi
+
+cd $source_dir
+
+# generate golden before patch
+export PYTHONPATH=$source_dir:$PYTHONPATH
+cd $golden_dir && python3 generate.py $model_file $input_shapes && cd -
+python3 $source_dir/demo/ONNXRuntime/onnx_inference.py -m $model_file -i ./assets/dog.jpg -s 0.3 --input_shape $onnx_input_shapes
+
+# apply patch
+#git apply --reject ../patch/*.patch
+#git am ../patch/*.patch
+#cd $cur_dir
