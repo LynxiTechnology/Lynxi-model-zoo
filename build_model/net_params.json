@@ -1,0 +1,18 @@
+{
+      "target": "apu",
+      "is_map": true,
+      "chip_num": 1,
+      "net_num": 1,
+      "parallel_mode": "DP",
+      "map_batch": 1,
+      "cpu_arch": "arm",
+      "cc": "aarch64-linux-gnu-g++",
+      "file_name": {
+            "cpu_lib": "deploy_lib.so",
+            "cpu_graph": "deploy_graph.json",
+            "cpu_params": "deploy_param.params",
+            "apu_lib": "apu_lib.bin",
+            "io_config": "top_graph.json"
+      },
+      "net:": null
+}
