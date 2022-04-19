@@ -1,0 +1,32 @@
+{
+  "main": {
+    "inputs": {
+      "images": {
+        "shape": "(1, 3, 640, 640)",
+        "dtype": "float32",
+        "batch": 1
+      }
+    },
+    "outputs": {
+      "apu_0:0": {
+        "shape": "(1, 8400, 85)",
+        "dtype": "float32"
+      }
+    }
+  },
+  "apu_0": {
+    "inputs": {
+      "images": {
+        "shape": "(1, 3, 640, 640)",
+        "dtype": "float32",
+        "batch": 1
+      }
+    },
+    "outputs": {
+      "apu_0:0": {
+        "shape": "(1, 8400, 85)",
+        "dtype": "float32"
+      }
+    }
+  }
+}
