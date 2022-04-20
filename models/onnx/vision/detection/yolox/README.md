@@ -21,6 +21,7 @@
    1_prepare.sh
    2_convert.sh
    3_test.sh
+   4_detect.sh
 ```
 
 
