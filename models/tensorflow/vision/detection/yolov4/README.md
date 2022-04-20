@@ -1,14 +1,9 @@
-# ultralytics-yolov5
+# darknet2tf
 
-模型来源：https://github.com/ultralytics/yolov5/
-
-发行版本：6.0
+模型来源：https://github.com/TNTWEN/OpenVINO-YOLOV4
 
 ## 支持列表
-- [x] yolov5s @640x640
-- [x] yolov5m @640x640
-- [ ] yolov5l @640x640
-- [ ] yolov5x @640x640
+- [ ] yolov4 @416x416
 
 ## 用法
 
