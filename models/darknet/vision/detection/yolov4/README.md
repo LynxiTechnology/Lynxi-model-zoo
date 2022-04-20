@@ -1,9 +1,11 @@
 # darknet2tf
 
-模型来源：https://github.com/TNTWEN/OpenVINO-YOLOV4
+本项目使用开源工具将 Darknet Yolov4 权重转换为 Tensorflow 模型并对转换后的模型进行编译。
+转换工具：https://github.com/TNTWEN/OpenVINO-YOLOV4 
+模型来源：https://github.com/AlexeyAB/darknet/releases/download/darknet_yolo_v3_optimal/yolov4.weights
 
 ## 支持列表
-- [ ] yolov4 @416x416
+- [x] yolov4 @416x416
 
 ## 用法
 
