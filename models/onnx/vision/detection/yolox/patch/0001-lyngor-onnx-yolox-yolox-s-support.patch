@@ -1,7 +1,7 @@
 From 6d3b6dbda65b02737a965063198bffc237b61d6a Mon Sep 17 00:00:00 2001
 From: lu gao <lu.gao@lynxi.com>
 Date: Tue, 19 Apr 2022 11:00:09 +0800
-Subject: [PATCH] lyngor onnx::yolox::yolox-s::support
+Subject: [PATCH 1/2] lyngor onnx::yolox::yolox-s::support
 
 ---
  .gitignore    |  6 ++++

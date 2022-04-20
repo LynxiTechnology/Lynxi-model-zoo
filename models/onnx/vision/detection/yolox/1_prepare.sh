@@ -26,9 +26,10 @@ cd $source_dir
 # generate golden before patch
 export PYTHONPATH=$source_dir:$PYTHONPATH
 cd $golden_dir && python3 generate.py $model_file $input_shapes && cd -
-python3 $source_dir/demo/ONNXRuntime/onnx_inference.py -m $model_file -i ./assets/dog.jpg -s 0.3 --input_shape $onnx_input_shapes
+python3 $source_dir/demo/ONNXRuntime/onnx_inference.py -m $model_file -i $source_dir/assets/dog.jpg -s 0.3 --input_shape $onnx_input_shapes
 
 # apply patch
-#git apply --reject ../patch/*.patch
-#git am ../patch/*.patch
-#cd $cur_dir
+cd $source_dir
+git apply --reject ../patch/*.patch
+git am ../patch/*.patch
+cd $cur_dir
