@@ -24,7 +24,7 @@ fi
 
 cd $source_dir
 # support master
-git checkout master
+git checkout 4974156fd8962a5610ec6d34327788b2f2ec2b42
 
 # apply patch
 git am ../patch/*.patch
