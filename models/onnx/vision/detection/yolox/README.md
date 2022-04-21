@@ -2,8 +2,6 @@
 
 模型来源：https://github.com/Megvii-BaseDetection/YOLOX/tree/main/demo/ONNXRuntime
 
-发行版本：0.1.1rc0
-
 ## 支持列表
 - [x] YOLOX-s @640x640
 - [ ] YOLOX-m @640x640
