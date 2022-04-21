@@ -1,0 +1,122 @@
+From 5103d073d01ab206c3396f86e6fc5e808f5b0476 Mon Sep 17 00:00:00 2001
+From: sparkssjj <doc_killer@163.com>
+Date: Wed, 20 Apr 2022 12:39:29 +0800
+Subject: [PATCH] add lyn_inference.py and edit util.py
+
+---
+ lyn_inference.py | 64 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ utils.py         | 11 ++++++----
+ 2 files changed, 71 insertions(+), 4 deletions(-)
+ create mode 100644 lyn_inference.py
+
+diff --git a/lyn_inference.py b/lyn_inference.py
+new file mode 100644
+index 0000000..19297cb
+--- /dev/null
++++ b/lyn_inference.py
+@@ -0,0 +1,64 @@
++import lyngor as lyn
++from PIL import Image
++import numpy as np
++from math import exp
++import sys
++from utils import non_max_suppression, draw_boxes
++sys.path.append("../../../../../common")
++import lynpy
++
++def letterbox_image(image, size):
++    # resize image with unchanged aspect ratio using padding
++    iw, ih = image.size
++    w, h = size
++    scale = min(w/iw, h/ih)
++    nw = int(iw*scale)
++    nh = int(ih*scale)
++
++    image = image.resize((nw,nh), Image.BICUBIC)
++    new_image = Image.new('RGB', size, (128,128,128))
++    new_image.paste(image, ((w-nw)//2, (h-nh)//2))
++    return new_image
++
++def main(lyn_model, image_path, classes_file, model_image_size=(416, 416), threshold=0.5, iou_threshold=0.4):
++    #read, resize, expand image
++    img_path = image_path
++    image = Image.open(img_path)
++    original_im_shape = (image.height, image.width)
++    boxed_image = letterbox_image(image, tuple(reversed(model_image_size)))
++    image_data = np.array(boxed_image, dtype='float32')
++    image_data = np.expand_dims(image_data, 0)
++
++    #load classes from coco.names
++    cls_names = {}
++    with open(classes_file, 'rt') as f:
++        classes = f.read().rstrip("\n").split("\n")
++    for n, name in enumerate(classes):
++        cls_names[n] = name
++
++    #lynpy inference
++    lynpy_model = lynpy.Model(path= lyn_model + '/Net_0')
++    inputs = lynpy_model.input_tensor().from_numpy(image_data).apu()
++    result = lynpy_model(inputs).cpu().view_as(shape=(1, 10647, 85)).numpy()
++
++    #postprocess
++    boxes = non_max_suppression(result, threshold, iou_threshold=iou_threshold)
++
++    #daw boxes and save image
++    draw_boxes(boxes, image, cls_names, model_image_size, True)
++
++if __name__ == "__main__":
++    argc = len(sys.argv)
++    if argc != 5:
++        print('usage: python3 lyn_inference.py <image_path> <input_shapes> <class_name> <output_dir>')
++    assert(argc == 5)
++
++    image = sys.argv[1]
++
++    shapes = tuple(map(int, sys.argv[2].split(",")))
++    size = (shapes[1], shapes[2])
++    # anchors = [12.0, 16.0, 19.0, 36.0, 40.0, 28.0, 36.0, 75.0, 76.0, 55.0, 72.0, 146.0, 142.0, 110.0, 192.0, 243.0, 459.0, 401.0]
++    classes = sys.argv[3]
++    lyn_model = sys.argv[4]
++
++    main(lyn_model, image_path=image, classes_file=classes, model_image_size=size, threshold=0.3, iou_threshold=0.4)
+\ No newline at end of file
+diff --git a/utils.py b/utils.py
+index c4cce93..20e49b6 100644
+--- a/utils.py
++++ b/utils.py
+@@ -2,7 +2,7 @@
+ 
+ import numpy as np
+ import tensorflow as tf
+-from PIL import ImageDraw, Image
++from PIL import ImageDraw, Image, ImageFont
+ 
+ 
+ def get_boxes_and_inputs_pb(frozen_graph):
+@@ -187,7 +187,7 @@ def non_max_suppression(predictions_with_boxes, confidence_threshold, iou_thresh
+     for i, image_pred in enumerate(predictions):
+         shape = image_pred.shape
+         non_zero_idxs = np.nonzero(image_pred)
+-        image_pred = image_pred[non_zero_idxs]
++        image_pred = image_pred[non_zero_idxs[0]]
+         image_pred = image_pred.reshape(-1, shape[-1])
+ 
+         bbox_attrs = image_pred[:, :5]
+@@ -236,9 +236,12 @@ def draw_boxes(boxes, img, cls_names, detection_size, is_letter_box_image):
+             box = convert_to_original_size(box, np.array(detection_size),
+                                            np.array(img.size),
+                                            is_letter_box_image)
+-            draw.rectangle(box, outline=color)
++            draw.rectangle(box, outline=color, width=5)
++            # fnt = ImageFont.truetype("arial.ttf", 20)
+             draw.text(box[:2], '{} {:.2f}%'.format(
+-                cls_names[cls], score * 100), fill=color)
++                cls_names[cls], score * 100), fill=color, width=3)
++            print(cls_names[cls], " : ", score * 100)
++    img.save('./reuslts.jpg')
+ 
+ 
+ def convert_to_original_size(box, size, original_size, is_letter_box_image):
+-- 
+2.7.4
+
