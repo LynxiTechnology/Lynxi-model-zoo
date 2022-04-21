@@ -1,39 +1,32 @@
-From 2ca17e585d9bbe9f9139ebaaf1934463b04fb84b Mon Sep 17 00:00:00 2001
+From 577d192c7751a8b936f841b6cd83a34a7b94a27c Mon Sep 17 00:00:00 2001
 From: lu gao <lu.gao@lynxi.com>
-Date: Wed, 20 Apr 2022 17:26:15 +0800
-Subject: [PATCH] support onnx:yolox-s
+Date: Thu, 21 Apr 2022 17:51:42 +0800
+Subject: [PATCH] models: onnx: support yolox
 
 ---
- lyncompile.py | 14 +++++++++
- lyndetect.py  | 99 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- lynsetting.py |  1 +
- lyntest.py    | 30 ++++++++++++++++++
- 4 files changed, 144 insertions(+)
- create mode 100755 lyncompile.py
+ demo/ONNXRuntime/onnx_inference.py |  3 +-
+ lyndetect.py                       | 99 ++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 100 insertions(+), 2 deletions(-)
  create mode 100755 lyndetect.py
- create mode 100755 lynsetting.py
- create mode 100755 lyntest.py
 
-diff --git a/lyncompile.py b/lyncompile.py
-new file mode 100755
-index 0000000..00ac120
---- /dev/null
-+++ b/lyncompile.py
-@@ -0,0 +1,14 @@
-+#!/usr/bin/env python3
-+# -*- coding: utf-8 -*-
-+
-+import lyngor as lyn
-+import lynsetting
-+
-+dlmodel = lyn.DLModel()
-+dlmodel.load("yolox_s.onnx", model_type='ONNX',
-+            inputs_dict={'images': lynsetting.LYN_INPUT})
-+
-+#使用 lyn.Builder()接口创建 Builder。
-+builder = lyn.Builder(target='apu', is_map=True)
-+#使用 builder()方法编译计算图 graph，并保存。
-+builder.build(dlmodel.graph, dlmodel.params, out_path="./build_model")
+diff --git a/demo/ONNXRuntime/onnx_inference.py b/demo/ONNXRuntime/onnx_inference.py
+index ee164bd..1d42b16 100644
+--- a/demo/ONNXRuntime/onnx_inference.py
++++ b/demo/ONNXRuntime/onnx_inference.py
+@@ -67,7 +67,6 @@ if __name__ == '__main__':
+     img, ratio = preprocess(origin_img, input_shape)
+ 
+     session = onnxruntime.InferenceSession(args.model)
+-
+     ort_inputs = {session.get_inputs()[0].name: img[None, :, :, :]}
+     output = session.run(None, ort_inputs)
+     predictions = demo_postprocess(output[0], input_shape, p6=args.with_p6)[0]
+@@ -89,4 +88,4 @@ if __name__ == '__main__':
+ 
+     mkdir(args.output_dir)
+     output_path = os.path.join(args.output_dir, os.path.basename(args.image_path))
+-    cv2.imwrite(output_path, origin_img)
++    cv2.imwrite(output_path, origin_img)
 \ No newline at end of file
 diff --git a/lyndetect.py b/lyndetect.py
 new file mode 100755
@@ -140,50 +133,6 @@ index 0000000..1e4eecd
 +    cv2.imwrite(output_path, origin_img)
 +    
 +
-diff --git a/lynsetting.py b/lynsetting.py
-new file mode 100755
-index 0000000..6d2c8cb
---- /dev/null
-+++ b/lynsetting.py
-@@ -0,0 +1 @@
-+LYN_INPUT = (1, 3, 640, 640)
-\ No newline at end of file
-diff --git a/lyntest.py b/lyntest.py
-new file mode 100755
-index 0000000..64f7e42
---- /dev/null
-+++ b/lyntest.py
-@@ -0,0 +1,30 @@
-+#!/usr/bin/env python3
-+# -*- coding: utf-8 -*-
-+
-+import torch
-+import lynsetting
-+import lyngor as lyn
-+import numpy as np
-+import onnxruntime
-+import lynpy
-+
-+def lyn_loss(output, lyn_output):
-+    return np.sqrt(np.sum( (np.float32(lyn_output)-np.float32(output))**2 )) \
-+            / np.sqrt(np.sum( np.float32(output)**2 ))
-+
-+input = torch.rand(lynsetting.LYN_INPUT)
-+
-+session = onnxruntime.InferenceSession("yolox_s.onnx")
-+ort_inputs = {session.get_inputs()[0].name: input.numpy()}
-+inname = [input.name for input in session.get_inputs()]
-+
-+output1 = session.run(None, ort_inputs)
-+
-+lyn_model = lynpy.Model(path='./build_model/Net_0')
-+lyn_in = lyn_model.input_tensor().from_numpy(input.numpy()).apu()
-+lyn_model(lyn_in)
-+output2 = lyn_model.output_list()[0][0].cpu()
-+print(output1[0].shape)
-+print(output2.numpy().shape)
-+loss = lyn_loss(output1[0], output2.numpy())
-+print(f'=======loss {loss}========')
 -- 
 2.7.4
 
