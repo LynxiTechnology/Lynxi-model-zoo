@@ -23,7 +23,9 @@ if [ ! -d "$source_dir" ]; then
 fi
 
 cd $source_dir
-git checkout 6513f769fa500b3c7ad23b90a91dcbd8402be330
+
+# git checkout 6513f769fa500b3c7ad23b90a91dcbd8402be330
+git checkout 0.1.1rc0
 
 # generate golden before patch
 export PYTHONPATH=$source_dir:$PYTHONPATH
@@ -32,6 +34,5 @@ python3 $source_dir/demo/ONNXRuntime/onnx_inference.py -m $model_file -i $source
 
 # apply patch
 cd $source_dir
-# git am --abort
 git am ../patch/*.patch
 cd $cur_dir

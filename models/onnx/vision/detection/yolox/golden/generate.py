@@ -11,12 +11,12 @@ if argc != 3:
 model_file = sys.argv[1]
 onnx_input_shape = tuple(map(int, sys.argv[2].split(",")))
 
-input = torch.rand(onnx_input_shape)
+input = np.random.uniform(0.0, 1.0, onnx_input_shape).astype('float32')
 session = onnxruntime.InferenceSession(model_file)
-ort_inputs = {session.get_inputs()[0].name: input.numpy()}
+ort_inputs = {session.get_inputs()[0].name: input}
 inname = [input.name for input in session.get_inputs()]
 
 output1 = session.run(None, ort_inputs)
 
-input.numpy().tofile('input.bin')
+input.tofile('input.bin')
 np.array(output1).tofile('output.bin')
