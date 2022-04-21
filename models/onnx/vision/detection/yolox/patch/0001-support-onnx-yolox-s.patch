@@ -1,42 +1,19 @@
-From 6d3b6dbda65b02737a965063198bffc237b61d6a Mon Sep 17 00:00:00 2001
+From 2ca17e585d9bbe9f9139ebaaf1934463b04fb84b Mon Sep 17 00:00:00 2001
 From: lu gao <lu.gao@lynxi.com>
-Date: Tue, 19 Apr 2022 11:00:09 +0800
-Subject: [PATCH 1/2] lyngor onnx::yolox::yolox-s::support
+Date: Wed, 20 Apr 2022 17:26:15 +0800
+Subject: [PATCH] support onnx:yolox-s
 
 ---
- .gitignore    |  6 ++++
  lyncompile.py | 14 +++++++++
  lyndetect.py  | 99 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
  lynsetting.py |  1 +
  lyntest.py    | 30 ++++++++++++++++++
- 5 files changed, 150 insertions(+)
+ 4 files changed, 144 insertions(+)
  create mode 100755 lyncompile.py
  create mode 100755 lyndetect.py
  create mode 100755 lynsetting.py
  create mode 100755 lyntest.py
 
-diff --git a/.gitignore b/.gitignore
-index a09a31b..a1e2025 100644
---- a/.gitignore
-+++ b/.gitignore
-@@ -212,6 +212,10 @@ docs/api
- *.onnx
- *.engine
- events.out.tfevents*
-+demo_output/
-+build_model/
-+*.bin
-+*.patch
- 
- # vscode
- *.code-workspace
-@@ -219,3 +223,5 @@ events.out.tfevents*
- 
- # vim
- .vim
-+
-+lynpy.py
-\ No newline at end of file
 diff --git a/lyncompile.py b/lyncompile.py
 new file mode 100755
 index 0000000..00ac120

@@ -15,13 +15,15 @@ if [ ! -d "$source_dir" ]; then
     cd $source_dir
 
     # fixed torch 1.7.0 at first
-    pip install torch==1.7.0 torchvision
-    pip install -r requirements.txt
-    pip install opencv-python
+    pip3 install torch==1.7.0 torchvision
+    pip3 install -r requirements.txt
+    pip3 install opencv-python
+    pip3 install -v -e .
 
 fi
 
 cd $source_dir
+git checkout 6513f769fa500b3c7ad23b90a91dcbd8402be330
 
 # generate golden before patch
 export PYTHONPATH=$source_dir:$PYTHONPATH
@@ -30,6 +32,6 @@ python3 $source_dir/demo/ONNXRuntime/onnx_inference.py -m $model_file -i $source
 
 # apply patch
 cd $source_dir
-git apply --reject ../patch/*.patch
+# git am --abort
 git am ../patch/*.patch
 cd $cur_dir
