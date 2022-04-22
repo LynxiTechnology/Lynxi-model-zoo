@@ -1,12 +1,12 @@
-From 577d192c7751a8b936f841b6cd83a34a7b94a27c Mon Sep 17 00:00:00 2001
+From cee3cc5b7004c4689bd67146d29c84ebf1f66015 Mon Sep 17 00:00:00 2001
 From: lu gao <lu.gao@lynxi.com>
-Date: Thu, 21 Apr 2022 17:51:42 +0800
+Date: Fri, 22 Apr 2022 11:35:20 +0800
 Subject: [PATCH] models: onnx: support yolox
 
 ---
  demo/ONNXRuntime/onnx_inference.py |  3 +-
- lyndetect.py                       | 99 ++++++++++++++++++++++++++++++++++++++
- 2 files changed, 100 insertions(+), 2 deletions(-)
+ lyndetect.py                       | 98 ++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 99 insertions(+), 2 deletions(-)
  create mode 100755 lyndetect.py
 
 diff --git a/demo/ONNXRuntime/onnx_inference.py b/demo/ONNXRuntime/onnx_inference.py
@@ -30,10 +30,10 @@ index ee164bd..1d42b16 100644
 \ No newline at end of file
 diff --git a/lyndetect.py b/lyndetect.py
 new file mode 100755
-index 0000000..1e4eecd
+index 0000000..7eac7fa
 --- /dev/null
 +++ b/lyndetect.py
-@@ -0,0 +1,99 @@
+@@ -0,0 +1,98 @@
 +#!/usr/bin/env python3
 +# -*- coding: utf-8 -*-
 +
@@ -131,8 +131,7 @@ index 0000000..1e4eecd
 +    mkdir(args.output_dir)
 +    output_path = os.path.join(args.output_dir, os.path.basename(args.image_path))
 +    cv2.imwrite(output_path, origin_img)
-+    
-+
++ 
 -- 
 2.7.4
 
