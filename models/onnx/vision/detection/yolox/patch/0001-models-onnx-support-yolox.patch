@@ -1,39 +1,19 @@
-From cee3cc5b7004c4689bd67146d29c84ebf1f66015 Mon Sep 17 00:00:00 2001
+From 1c54c637b9d5f87940d0a0f784302eedfea1084d Mon Sep 17 00:00:00 2001
 From: lu gao <lu.gao@lynxi.com>
-Date: Fri, 22 Apr 2022 11:35:20 +0800
+Date: Fri, 22 Apr 2022 13:45:19 +0800
 Subject: [PATCH] models: onnx: support yolox
 
 ---
- demo/ONNXRuntime/onnx_inference.py |  3 +-
- lyndetect.py                       | 98 ++++++++++++++++++++++++++++++++++++++
- 2 files changed, 99 insertions(+), 2 deletions(-)
+ lyndetect.py | 99 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 99 insertions(+)
  create mode 100755 lyndetect.py
 
-diff --git a/demo/ONNXRuntime/onnx_inference.py b/demo/ONNXRuntime/onnx_inference.py
-index ee164bd..1d42b16 100644
---- a/demo/ONNXRuntime/onnx_inference.py
-+++ b/demo/ONNXRuntime/onnx_inference.py
-@@ -67,7 +67,6 @@ if __name__ == '__main__':
-     img, ratio = preprocess(origin_img, input_shape)
- 
-     session = onnxruntime.InferenceSession(args.model)
--
-     ort_inputs = {session.get_inputs()[0].name: img[None, :, :, :]}
-     output = session.run(None, ort_inputs)
-     predictions = demo_postprocess(output[0], input_shape, p6=args.with_p6)[0]
-@@ -89,4 +88,4 @@ if __name__ == '__main__':
- 
-     mkdir(args.output_dir)
-     output_path = os.path.join(args.output_dir, os.path.basename(args.image_path))
--    cv2.imwrite(output_path, origin_img)
-+    cv2.imwrite(output_path, origin_img)
-\ No newline at end of file
 diff --git a/lyndetect.py b/lyndetect.py
 new file mode 100755
-index 0000000..7eac7fa
+index 0000000..1e4eecd
 --- /dev/null
 +++ b/lyndetect.py
-@@ -0,0 +1,98 @@
+@@ -0,0 +1,99 @@
 +#!/usr/bin/env python3
 +# -*- coding: utf-8 -*-
 +
@@ -131,7 +111,8 @@ index 0000000..7eac7fa
 +    mkdir(args.output_dir)
 +    output_path = os.path.join(args.output_dir, os.path.basename(args.image_path))
 +    cv2.imwrite(output_path, origin_img)
-+ 
++    
++
 -- 
 2.7.4
 
