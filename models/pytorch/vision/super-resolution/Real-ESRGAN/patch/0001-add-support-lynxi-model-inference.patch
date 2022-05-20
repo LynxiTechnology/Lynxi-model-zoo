@@ -1,0 +1,53 @@
+From 6e7207a7b0bb41507dccd357bf00fe5b595c5b5d Mon Sep 17 00:00:00 2001
+From: "zhou.zhou" <zhou.zhou@lynxi.com>
+Date: Thu, 19 May 2022 18:16:38 +0800
+Subject: [PATCH] add support lynxi model inference
+
+---
+ realesrgan/utils.py | 15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/realesrgan/utils.py b/realesrgan/utils.py
+index 10e7c23..1815b0a 100644
+--- a/realesrgan/utils.py
++++ b/realesrgan/utils.py
+@@ -8,8 +8,10 @@ import torch
+ from basicsr.utils.download_util import load_file_from_url
+ from torch.nn import functional as F
+ 
+-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   
+ 
++import lynpy    
++import time 
+ 
+ class RealESRGANer():
+     """A helper class for upsampling images with RealESRGAN.
+@@ -51,6 +53,9 @@ class RealESRGANer():
+         self.model = model.to(self.device)
+         if self.half:
+             self.model = self.model.half()
++        
++        # Load model 
++        self.lyn_model = lynpy.Model(path=os.path.dirname(ROOT_DIR)+"/convert_out/Net_0")   ### -------------------
+ 
+     def pre_process(self, img):
+         """Pre-process, such as pre-pad and mod pad, so that the images can be divisible
+@@ -79,7 +84,13 @@ class RealESRGANer():
+ 
+     def process(self):
+         # model inference
+-        self.output = self.model(self.img)
++        # self.output = self.model(self.img)              # inference -------------------
++        tt1 = time.time()
++        lyn_in = self.lyn_model.input_tensor().from_numpy(self.img.numpy()).apu()
++        self.lyn_model(lyn_in) 
++        lyn_out = self.lyn_model.output_list()[0][0].cpu()
++        print(f" ### [SDK] cost time is {time.time()-tt1:.4f}s, {1/(time.time()-tt1):.1f}fps")
++        self.output = torch.from_numpy(lyn_out.numpy())
+ 
+     def tile_process(self):
+         """It will first crop input images to tiles, and then process each tile.
+-- 
+2.7.4
+
