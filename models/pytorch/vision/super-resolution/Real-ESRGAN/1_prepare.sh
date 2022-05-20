@@ -18,7 +18,7 @@ fi
 
 if [ ! -f "$model_file" ]; then
     # Specify directory 
-    wget -p $source_dir/experiments/pretrained_models/ $model_url   
+    wget -P $source_dir/experiments/pretrained_models/ $model_url   
 fi
 
 cd $source_dir
