@@ -7,3 +7,26 @@
 # 环境准备
 
 该工程需要依赖灵汐软硬件，编译转换需要Lyngor，测试需要SDK和硬件，请提前联系销售/售前获取并安装。模型在转换过程中需要安装对应的python库环境，因此强烈推荐安装virtualenv，在python虚拟环境中进行验证。
+- [x] python3.6
+- [ ] virtualenv
+- [x] lyngor
+- [x] lynsdk
+- [x] lyndriver
+
+## 安装
+
+``` shell
+git clone https://github.com/LynxiTechnology/Lynxi-model-zoo.git
+cd Lynxi-model-zoo
+
+# 创建并激活虚拟环境
+virtualenv venv
+source venv/bin/activate
+
+# 获取并安装lyngor
+pip install lyngor-x.x.x.x-cp36-cp36m-linux_x86_64.whl
+```
+
+## 测试
+
+请参考子目录下的说明进行测试
