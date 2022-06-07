@@ -6,9 +6,9 @@ echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@"
 
 source setting.cfg
 
-# if [ ! -f "$model_file" ]; then
-#     wget $model_url
-# fi
+if [ ! -f "$model_file" ]; then
+    wget $model_url
+fi
 
 if [ ! -d "$source_dir" ]; then
     git clone $source_url
