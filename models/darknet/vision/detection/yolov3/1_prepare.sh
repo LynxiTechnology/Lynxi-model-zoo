@@ -14,7 +14,7 @@ if [ ! -d "$source_dir" ]; then
     git clone $source_url
 
     # download package
-    pip install tensorflow==1.15.5 keras==2.2.5
+    pip install tensorflow==1.15.0 keras==2.2.5
     pip install numpy opencv-python pillow matplotlib
 fi
 
@@ -30,13 +30,6 @@ cd $cur_dir
 export PYTHONPATH=$source_dir:$PYTHONPATH
 #convert darknet to tensorflow
 python $source_dir/convert.py $source_dir/$yolo_categories.cfg $model_file $cur_dir/$yolo_categories.h5
-
-if [ "$yolo_categories" = "yolov3-tiny" ];
-then
-python $source_dir/keras2pb.py --input_model=$cur_dir/$yolo_categories.h5 --output_model=$converted_model --is_tiny=True
-else
-python $source_dir/keras2pb.py --input_model=$cur_dir/$yolo_categories.h5 --output_model=$converted_model
-fi
 
 # generate golden before patch
 cd $golden_dir && python3 generate.py $model_file $input_shapes && cd -
