@@ -1,0 +1,491 @@
+From 450ad39e349d5287e58a788df72d383e86065450 Mon Sep 17 00:00:00 2001
+From: lu gao <lu.gao@lynxi.com>
+Date: Mon, 13 Jun 2022 11:12:56 +0800
+Subject: [PATCH] yolov3-tiny keras lyndetect video kera2pb
+
+---
+ keras2pb.py   | 205 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ lyndetect.py  | 141 ++++++++++++++++++++++++++++++++++++++++
+ yolo.py       |  17 +++--
+ yolo_video.py |  20 ++++--
+ 4 files changed, 371 insertions(+), 12 deletions(-)
+ create mode 100755 keras2pb.py
+ create mode 100755 lyndetect.py
+
+diff --git a/keras2pb.py b/keras2pb.py
+new file mode 100755
+index 0000000..1416134
+--- /dev/null
++++ b/keras2pb.py
+@@ -0,0 +1,205 @@
++#!/usr/bin/env python
++"""
++Copyright (c) 2019, by the Authors: Amir H. Abdi
++This script is freely available under the MIT Public License.
++Please see the License file in the root for details.
++The following code snippet will convert the keras model files
++to the freezed .pb tensorflow weight file. The resultant TensorFlow model
++holds both the model architecture and its associated weights.
++"""
++import os
++os.environ["CUDA_VISIBLE_DEVICES"] = "0"
++import tensorflow as tf
++from tensorflow.python.framework import graph_util
++from tensorflow.python.framework import graph_io
++from pathlib import Path
++from absl import app
++from absl import flags
++from absl import logging
++from tensorflow import keras
++# from tensorflow.python.keras import backend as K
++# from tensorflow.python.keras.layers import Input
++# from tensorflow.python.keras.models import model_from_json, model_from_yaml
++from yolo3.model import yolo_head,yolo_body,tiny_yolo_body
++
++from keras.models import model_from_json, model_from_yaml
++from keras.layers import Input
++from keras import backend as K
++
++K.set_learning_phase(0)
++FLAGS = flags.FLAGS
++
++flags.DEFINE_string('input_model', None, 'Path to the input model.')
++flags.DEFINE_string('input_model_json', None, 'Path to the input model '
++                                              'architecture in json format.')
++flags.DEFINE_string('input_model_yaml', None, 'Path to the input model '
++                                              'architecture in yaml format.')
++flags.DEFINE_string('output_model', None, 'Path where the converted model will '
++                                          'be stored.')
++flags.DEFINE_boolean('save_graph_def', False,
++                     'Whether to save the graphdef.pbtxt file which contains '
++                     'the graph definition in ASCII format.')
++flags.DEFINE_string('output_nodes_prefix', None,
++                    'If set, the output nodes will be renamed to '
++                    '`output_nodes_prefix`+i, where `i` will numerate the '
++                    'number of of output nodes of the network.')
++flags.DEFINE_boolean('quantize', False,
++                     'If set, the resultant TensorFlow graph weights will be '
++                     'converted from float into eight-bit equivalents. See '
++                     'documentation here: '
++                     'https://github.com/tensorflow/tensorflow/tree/master/tensorflow/tools/graph_transforms')
++flags.DEFINE_boolean('channels_first', False,
++                     'Whether channels are the first dimension of a tensor. '
++                     'The default is TensorFlow behaviour where channels are '
++                     'the last dimension.')
++flags.DEFINE_boolean('output_meta_ckpt', False,
++                     'If set to True, exports the model as .meta, .index, and '
++                     '.data files, with a checkpoint file. These can be later '
++                     'loaded in TensorFlow to continue training.')
++
++flags.DEFINE_boolean('is_tiny', False,
++                     'If use yolov3-tiny, is_tiny = True')
++
++flags.DEFINE_integer('num_class', 80,
++                     'num_class for yolo')
++
++flags.mark_flag_as_required('input_model')
++flags.mark_flag_as_required('output_model')
++
++
++def load_model(input_model_path, input_json_path=None, input_yaml_path=None):
++    if not Path(input_model_path).exists():
++        raise FileNotFoundError(
++            'Model file `{}` does not exist.'.format(input_model_path))
++    try:
++        model = keras.models.load_model(input_model_path)
++        if FLAGS.is_tiny:
++            model = tiny_yolo_body(Input(shape=(None, None, 3)), 3, FLAGS.num_class)
++        else:
++            model = yolo_body(Input(shape=(None, None, 3)), 3, FLAGS.num_class)
++        
++        model.load_weights('input_model_path')
++        return model
++    except FileNotFoundError as err:
++        logging.error('Input mode file (%s) does not exist.', FLAGS.input_model)
++        raise err
++    except ValueError as wrong_file_err:
++        if input_json_path:
++            if not Path(input_json_path).exists():
++                raise FileNotFoundError(
++                    'Model description json file `{}` does not exist.'.format(
++                        input_json_path))
++            try:
++                model = model_from_json(open(str(input_json_path)).read())
++                model.load_weights(input_model_path)
++                return model
++            except Exception as err:
++                logging.error("Couldn't load model from json.")
++                raise err
++        elif input_yaml_path:
++            if not Path(input_yaml_path).exists():
++                raise FileNotFoundError(
++                    'Model description yaml file `{}` does not exist.'.format(
++                        input_yaml_path))
++            try:
++                model = model_from_yaml(open(str(input_yaml_path)).read())
++                model.load_weights(input_model_path)
++                return model
++            except Exception as err:
++                logging.error("Couldn't load model from yaml.")
++                raise err
++        else:
++            logging.error(
++                'Input file specified only holds the weights, and not '
++                'the model definition. Save the model using '
++                'model.save(filename.h5) which will contain the network '
++                'architecture as well as its weights. '
++                'If the model is saved using the '
++                'model.save_weights(filename) function, either '
++                'input_model_json or input_model_yaml flags should be set to '
++                'to import the network architecture prior to loading the '
++                'weights. \n'
++                'Check the keras documentation for more details '
++                '(https://keras.io/getting-started/faq/)')
++            raise wrong_file_err
++
++
++def main(args):
++    # If output_model path is relative and in cwd, make it absolute from root
++    output_model = FLAGS.output_model
++    if str(Path(output_model).parent) == '.':
++        output_model = str((Path.cwd() / output_model))
++
++    output_fld = Path(output_model).parent
++    output_model_name = Path(output_model).name
++    output_model_stem = Path(output_model).stem
++    output_model_pbtxt_name = output_model_stem + '.pbtxt'
++
++    # Create output directory if it does not exist
++    Path(output_model).parent.mkdir(parents=True, exist_ok=True)
++
++    if FLAGS.channels_first:
++        K.set_image_data_format('channels_first')
++    else:
++        K.set_image_data_format('channels_last')
++
++    # model = load_model(FLAGS.input_model, FLAGS.input_model_json, FLAGS.input_model_yaml)
++    model = None
++    if FLAGS.is_tiny:
++        model = tiny_yolo_body(Input(shape=(None, None, 3)), 3, FLAGS.num_class)
++    else:
++        model = yolo_body(Input(shape=(None, None, 3)), 3, FLAGS.num_class)
++    model.load_weights(FLAGS.input_model)
++    # TODO(amirabdi): Support networks with multiple inputs
++    orig_output_node_names = [node.op.name for node in model.outputs]
++    if FLAGS.output_nodes_prefix:
++        num_output = len(orig_output_node_names)
++        pred = [None] * num_output
++        converted_output_node_names = [None] * num_output
++
++        # Create dummy tf nodes to rename output
++        for i in range(num_output):
++            converted_output_node_names[i] = '{}{}'.format(
++                FLAGS.output_nodes_prefix, i)
++            pred[i] = tf.identity(model.outputs[i],
++                                  name=converted_output_node_names[i])
++    else:
++        converted_output_node_names = orig_output_node_names
++    logging.info('Converted output node names are: %s',
++                 str(converted_output_node_names))
++
++    sess = K.get_session()
++    if FLAGS.output_meta_ckpt:
++        saver = tf.train.Saver()
++        saver.save(sess, str(output_fld / output_model_stem))
++
++    if FLAGS.save_graph_def:
++        tf.train.write_graph(sess.graph.as_graph_def(), str(output_fld),
++                             output_model_pbtxt_name, as_text=True)
++        logging.info('Saved the graph definition in ascii format at %s',
++                     str(Path(output_fld) / output_model_pbtxt_name))
++
++    if FLAGS.quantize:
++        from tensorflow.tools.graph_transforms import TransformGraph
++        transforms = ["quantize_weights", "quantize_nodes"]
++        transformed_graph_def = TransformGraph(sess.graph.as_graph_def(), [],
++                                               converted_output_node_names,
++                                               transforms)
++        constant_graph = graph_util.convert_variables_to_constants(
++            sess,
++            transformed_graph_def,
++            converted_output_node_names)
++    else:
++        constant_graph = graph_util.convert_variables_to_constants(
++            sess,
++            sess.graph.as_graph_def(),
++            converted_output_node_names)
++
++    graph_io.write_graph(constant_graph, str(output_fld), output_model_name,
++                         as_text=False)
++    logging.info('Saved the freezed graph at %s',
++                 str(Path(output_fld) / output_model_name))
++
++
++if __name__ == "__main__":
++    app.run(main)
+\ No newline at end of file
+diff --git a/lyndetect.py b/lyndetect.py
+new file mode 100755
+index 0000000..e78e906
+--- /dev/null
++++ b/lyndetect.py
+@@ -0,0 +1,141 @@
++import os,sys
++import numpy as np
++from PIL import Image, ImageFont, ImageDraw
++from numpy.random import rand
++from yolo3.utils import letterbox_image
++from PIL import Image
++import colorsys
++from yolo3.model import yolo_eval
++from keras import backend as K
++import lynpy
++import argparse
++import matplotlib.font_manager as fm
++
++def make_parser():
++    parser = argparse.ArgumentParser("inference sample")
++    parser.add_argument(
++        "-m",
++        "--model",
++        type=str,
++        default="../convert_out/Net_0",
++        help="Input your lynor model.",
++    )
++    parser.add_argument(
++        "-i",
++        "--image_path",
++        type=str,
++        default='../images/bus.jpg',
++        help="Path to your input image.",
++    )
++    parser.add_argument(
++        "-o",
++        "--output_dir",
++        type=str,
++        default='../demo_output',
++        help="Path to your output directory.",
++    )
++    parser.add_argument(
++        "-a",
++        "--anchors",
++        type=str,
++        default='model_data/tiny_yolo_anchors.txt',
++        help="path to anchor definitions.",
++    )
++    parser.add_argument(
++        "--input_shape",
++        type=str,
++        default='416, 416',
++        help="Specify an input shape for inference.",
++    )
++    parser.add_argument(
++        "-c",
++        "--classes_path",
++        type=str,
++        default='model_data/coco_classes.txt',
++        help="path to classes definitions.",
++    )
++    
++    return parser
++
++def get_anchors(anchors_path):
++        anchors_path = os.path.expanduser(anchors_path)
++        with open(anchors_path) as f:
++            anchors = f.readline()
++        anchors = [float(x) for x in anchors.split(',')]
++        return np.array(anchors).reshape(-1, 2)
++
++def _get_class(classes_path):
++        classes_path = os.path.expanduser(classes_path)
++        with open(classes_path) as f:
++            class_names = f.readlines()
++        class_names = [c.strip() for c in class_names]
++        return class_names
++
++def run_lyn_inference():
++    lyn_model = lynpy.Model(path=args.model)
++    lyn_in = lyn_model.input_tensor().from_numpy(image_data).apu()
++    lyn_model(lyn_in)
++    output0,output1 = lyn_model.output_list()[0]
++    output0 = output0.cpu().numpy()
++    output1 = output1.cpu().numpy()
++    outputs = [K.constant(output0),K.constant(output1)]
++
++    return outputs
++
++if __name__ == '__main__':
++    args = make_parser().parse_args()
++    image = Image.open(args.image_path)
++    ll = args.input_shape.split(',')
++    boxed_image = letterbox_image(image, tuple(reversed(tuple(map(int, ll)))))
++    image_data = np.array(boxed_image, dtype='float32')
++    image_data /= 255.
++    image_data = np.expand_dims(image_data, 0)
++    #inference
++    outputs = run_lyn_inference()
++
++    anchors = get_anchors(args.anchors)
++    class_names = _get_class(args.classes_path)
++    input_image_shape = (image.size[1],image.size[0])
++
++    out_boxes, out_scores, out_classes = yolo_eval(outputs, anchors, len(class_names), input_image_shape, score_threshold=.3,
++              iou_threshold=.45)
++    hsv_tuples = [(x / len(class_names), 1., 1.)
++                      for x in range(len(class_names))]
++    
++    fontsize = np.floor(3e-2 * image.size[1] + 0.5).astype('int32')
++    font = ImageFont.truetype(fm.findfont(fm.FontProperties(family='DejaVu Sans')),fontsize)
++    thickness = (image.size[0] + image.size[1]) // 300
++    colors = list(map(lambda x: colorsys.hsv_to_rgb(*x), hsv_tuples))
++    colors = list(map(lambda x: (int(x[0] * 255), int(x[1] * 255), int(x[2] * 255)),
++                    colors))
++    out_boxes, out_scores, out_classes= K.eval(out_boxes), K.eval(out_scores), K.eval(out_classes)
++    for i, c in reversed(list(enumerate(out_classes))):
++        predicted_class = class_names[c]
++        box = out_boxes[i]
++        score = out_scores[i]
++        label = '{} {:.2f}'.format(predicted_class, score)
++        draw = ImageDraw.Draw(image)
++        label_size = draw.textsize(label, font)
++
++        top, left, bottom, right = box
++        top = max(0, np.floor(top + 0.5).astype('int32'))
++        left = max(0, np.floor(left + 0.5).astype('int32'))
++        bottom = min(image.size[1], np.floor(bottom + 0.5).astype('int32'))
++        right = min(image.size[0], np.floor(right + 0.5).astype('int32'))
++        print(label, (left, top), (right, bottom))
++
++        if top - label_size[1] >= 0:
++            text_origin = np.array([left, top - label_size[1]])
++        else:
++            text_origin = np.array([left, top + 1])
++
++        for i in range(thickness):
++            draw.rectangle(
++                [left + i, top + i, right - i, bottom - i],
++                outline=colors[c])
++        draw.rectangle(
++            [tuple(text_origin), tuple(text_origin + label_size)],
++            fill=colors[c])
++        draw.text(text_origin, label, fill=(0, 0, 0), font=font)
++        del draw
++    image.save(os.path.join(args.output_dir,"test.jpg"))
+\ No newline at end of file
+diff --git a/yolo.py b/yolo.py
+index 4aa3486..2558823 100644
+--- a/yolo.py
++++ b/yolo.py
+@@ -6,6 +6,7 @@ Class definition of YOLO_v3 style detection model on image and video
+ import colorsys
+ import os
+ from timeit import default_timer as timer
++import matplotlib.font_manager as fm
+ 
+ import numpy as np
+ from keras import backend as K
+@@ -112,7 +113,6 @@ class YOLO(object):
+             boxed_image = letterbox_image(image, new_image_size)
+         image_data = np.array(boxed_image, dtype='float32')
+ 
+-        print(image_data.shape)
+         image_data /= 255.
+         image_data = np.expand_dims(image_data, 0)  # Add batch dimension.
+ 
+@@ -126,10 +126,12 @@ class YOLO(object):
+ 
+         print('Found {} boxes for {}'.format(len(out_boxes), 'img'))
+ 
+-        font = ImageFont.truetype(font='font/FiraMono-Medium.otf',
+-                    size=np.floor(3e-2 * image.size[1] + 0.5).astype('int32'))
++        # font = ImageFont.truetype(font='font/FiraMono-Medium.otf',
++        #             size=np.floor(3e-2 * image.size[1] + 0.5).astype('int32'))
++        fontsize = 50
++        font = ImageFont.truetype(fm.findfont(fm.FontProperties(family='DejaVu Sans')),fontsize)
+         thickness = (image.size[0] + image.size[1]) // 300
+-
++       
+         for i, c in reversed(list(enumerate(out_classes))):
+             predicted_class = self.class_names[c]
+             box = out_boxes[i]
+@@ -161,7 +163,9 @@ class YOLO(object):
+                 fill=self.colors[c])
+             draw.text(text_origin, label, fill=(0, 0, 0), font=font)
+             del draw
+-
++        
++        jpgname=self.input_image_path[self.input_image_path.rfind("/")+1:]
++        image.save(os.path.join(self.output_image_path,jpgname))
+         end = timer()
+         print(end - start)
+         return image
+@@ -208,5 +212,4 @@ def detect_video(yolo, video_path, output_path=""):
+             out.write(result)
+         if cv2.waitKey(1) & 0xFF == ord('q'):
+             break
+-    yolo.close_session()
+-
++    yolo.close_session()
+\ No newline at end of file
+diff --git a/yolo_video.py b/yolo_video.py
+index 7c39461..b5a1b3b 100644
+--- a/yolo_video.py
++++ b/yolo_video.py
+@@ -5,14 +5,14 @@ from PIL import Image
+ 
+ def detect_img(yolo):
+     while True:
+-        img = input('Input image filename:')
+         try:
+-            image = Image.open(img)
++            image = Image.open(FLAGS.input_image_path)
+         except:
+             print('Open Error! Try again!')
+             continue
+         else:
+             r_image = yolo.detect_image(image)
++            if FLAGS.image == True:break
+             r_image.show()
+     yolo.close_session()
+ 
+@@ -25,17 +25,17 @@ if __name__ == '__main__':
+     Command line options
+     '''
+     parser.add_argument(
+-        '--model', type=str,
++        '--model_path', type=str,
+         help='path to model weight file, default ' + YOLO.get_defaults("model_path")
+     )
+ 
+     parser.add_argument(
+-        '--anchors', type=str,
++        '--anchors_path', type=str,
+         help='path to anchor definitions, default ' + YOLO.get_defaults("anchors_path")
+     )
+ 
+     parser.add_argument(
+-        '--classes', type=str,
++        '--classes_path', type=str,
+         help='path to class definitions, default ' + YOLO.get_defaults("classes_path")
+     )
+ 
+@@ -61,6 +61,16 @@ if __name__ == '__main__':
+         help = "[Optional] Video output path"
+     )
+ 
++    parser.add_argument(
++        '--input_image_path', type=str, required=True, default='../images/bus.jpg',
++        help='input image path'
++    )
++
++    parser.add_argument(
++        '--output_image_path', type=str, required=True, default='../golden',
++        help='output image path'
++    )
++
+     FLAGS = parser.parse_args()
+ 
+     if FLAGS.image:
+-- 
+2.7.4
+
