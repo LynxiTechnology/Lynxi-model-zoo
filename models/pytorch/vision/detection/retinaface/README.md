@@ -1,4 +1,4 @@
-# YOLOX
+# retinaface
 
 模型来源：https://github.com/biubug6/Pytorch_Retinaface
 
@@ -8,14 +8,16 @@
 1. 从百度网盘下载依赖项mobilenet0.25_Final.pth, mobilenetV1X0.25_pretrain.tar并放在patch目录下
 (https://pan.baidu.com/s/12h97Fy1RYuqMMIV-RpzdPg  Password: fstq)
 
-2. 运行框架原始模型
-bash build.sh 1_prepare
+2. 执行shell
+```shell
+   1_prepare.sh
+   2_convert.sh
+   3_test.sh
+   4_detect.sh
+```
 
-3. 运行灵汐编译模型
-bash build.sh 3_test
-
-4. 执行结果概要
-在目录./Pytorch_Retinaface/dump_log中生成所有必要信息，部分必要信息展示在日志中
+3. 结果概要
+在目录./Pytorch_Retinaface/dump_log中生成所有必要信息，部分必要在终端显示
 ├── input_myself.bin
 ├── logger.log
 ├── model_myself            // lynxi模型
