@@ -1,0 +1,1897 @@
+From e868b8932fafef8e05c94975cd294e50a56fc55a Mon Sep 17 00:00:00 2001
+From: "shuangquan.he" <shuangquan.he@lynxi.com>
+Date: Tue, 21 Jun 2022 18:07:25 +0800
+Subject: [PATCH] support lynxi's model on retinaface
+
+---
+ detect.py               | 148 ++++++++++----
+ main_myself.py          | 473 ++++++++++++++++++++++++++++++++++++++++++
+ pylib/lynpy/__init__.py |   0
+ pylib/lynpy/lynpy.py    | 530 ++++++++++++++++++++++++++++++++++++++++++++++++
+ pylib/pyutil/Gconf.py   |  35 ++++
+ pylib/pyutil/Measure.py |  73 +++++++
+ pylib/pyutil/Pmodel.py  | 228 +++++++++++++++++++++
+ pylib/pyutil/Utils.py   |  65 ++++++
+ train.py                |  90 +++++---
+ 9 files changed, 1583 insertions(+), 59 deletions(-)
+ create mode 100755 main_myself.py
+ create mode 100755 pylib/lynpy/__init__.py
+ create mode 100755 pylib/lynpy/lynpy.py
+ create mode 100755 pylib/pyutil/Gconf.py
+ create mode 100755 pylib/pyutil/Measure.py
+ create mode 100755 pylib/pyutil/Pmodel.py
+ create mode 100755 pylib/pyutil/Utils.py
+
+diff --git a/detect.py b/detect.py
+index 2e82240..20711a2 100755
+--- a/detect.py
++++ b/detect.py
+@@ -1,6 +1,8 @@
+ from __future__ import print_function
+ import os
+ import argparse
++from pickle import TRUE
++from sklearn import impute
+ import torch
+ import torch.backends.cudnn as cudnn
+ import numpy as np
+@@ -11,21 +13,46 @@ import cv2
+ from models.retinaface import RetinaFace
+ from utils.box_utils import decode, decode_landm
+ import time
++import pdb
+
+ parser = argparse.ArgumentParser(description='Retinaface')
+
+-parser.add_argument('-m', '--trained_model', default='./weights/Resnet50_Final.pth',
+-                    type=str, help='Trained state_dict file path to open')
+-parser.add_argument('--network', default='resnet50', help='Backbone network mobile0.25 or resnet50')
+-parser.add_argument('--cpu', action="store_true", default=False, help='Use cpu inference')
+-parser.add_argument('--confidence_threshold', default=0.02, type=float, help='confidence_threshold')
++parser.add_argument('-m',
++                    '--trained_model',
++                    default='./weights/Resnet50_Final.pth',
++                    type=str,
++                    help='Trained state_dict file path to open')
++parser.add_argument('--network',
++                    default='resnet50',
++                    help='Backbone network mobile0.25 or resnet50')
++parser.add_argument('--cpu',
++                    action="store_true",
++                    default=True,
++                    help='Use cpu inference')
++parser.add_argument('--confidence_threshold',
++                    default=0.02,
++                    type=float,
++                    help='confidence_threshold')
+ parser.add_argument('--top_k', default=5000, type=int, help='top_k')
+-parser.add_argument('--nms_threshold', default=0.4, type=float, help='nms_threshold')
++parser.add_argument('--nms_threshold',
++                    default=0.4,
++                    type=float,
++                    help='nms_threshold')
+ parser.add_argument('--keep_top_k', default=750, type=int, help='keep_top_k')
+-parser.add_argument('-s', '--save_image', action="store_true", default=True, help='show detection results')
+-parser.add_argument('--vis_thres', default=0.6, type=float, help='visualization_threshold')
++parser.add_argument('-s',
++                    '--save_image',
++                    action="store_true",
++                    default=True,
++                    help='show detection results')
++parser.add_argument('--vis_thres',
++                    default=0.6,
++                    type=float,
++                    help='visualization_threshold')
+ args = parser.parse_args()
+
++S_INPUT_BIN = True  # �����Ƿ�ʹ��Ԥ����������л��ļ�
++S_DUMP = True  # �Ƿ����л�����
++
+
+ def check_keys(model, pretrained_state_dict):
+     ckpt_keys = set(pretrained_state_dict.keys())
+@@ -36,26 +63,34 @@ def check_keys(model, pretrained_state_dict):
+     print('Missing keys:{}'.format(len(missing_keys)))
+     print('Unused checkpoint keys:{}'.format(len(unused_pretrained_keys)))
+     print('Used keys:{}'.format(len(used_pretrained_keys)))
+-    assert len(used_pretrained_keys) > 0, 'load NONE from pretrained checkpoint'
++    assert len(
++        used_pretrained_keys) > 0, 'load NONE from pretrained checkpoint'
+     return True
+
+
+ def remove_prefix(state_dict, prefix):
+     ''' Old style model is stored with all names of parameters sharing common prefix 'module.' '''
+     print('remove prefix \'{}\''.format(prefix))
+-    f = lambda x: x.split(prefix, 1)[-1] if x.startswith(prefix) else x
++
++    def f(x):
++        return x.split(prefix, 1)[-1] if x.startswith(prefix) else x
++
+     return {f(key): value for key, value in state_dict.items()}
+
+
+ def load_model(model, pretrained_path, load_to_cpu):
+     print('Loading pretrained model from {}'.format(pretrained_path))
+     if load_to_cpu:
+-        pretrained_dict = torch.load(pretrained_path, map_location=lambda storage, loc: storage)
++        pretrained_dict = torch.load(pretrained_path,
++                                     map_location=lambda storage, loc: storage)
+     else:
+         device = torch.cuda.current_device()
+-        pretrained_dict = torch.load(pretrained_path, map_location=lambda storage, loc: storage.cuda(device))
++        pretrained_dict = torch.load(
++            pretrained_path,
++            map_location=lambda storage, loc: storage.cuda(device))
+     if "state_dict" in pretrained_dict.keys():
+-        pretrained_dict = remove_prefix(pretrained_dict['state_dict'], 'module.')
++        pretrained_dict = remove_prefix(pretrained_dict['state_dict'],
++                                        'module.')
+     else:
+         pretrained_dict = remove_prefix(pretrained_dict, 'module.')
+     check_keys(model, pretrained_dict)
+@@ -71,36 +106,78 @@ if __name__ == '__main__':
+     elif args.network == "resnet50":
+         cfg = cfg_re50
+     # net and model
+-    net = RetinaFace(cfg=cfg, phase = 'test')
++    net = RetinaFace(cfg=cfg, phase='test')
+     net = load_model(net, args.trained_model, args.cpu)
++
+     net.eval()
+     print('Finished loading model!')
+-    print(net)
++    # print(net)
++    # print(net.state_dict())
++
+     cudnn.benchmark = True
+-    device = torch.device("cpu" if args.cpu else "cuda")
++    device = torch.device('cpu')
++    # device = torch.device("cpu" if args.cpu else "cuda")
+     net = net.to(device)
+-
++    if False:
++        torch.save(net, "../../model/model_bilinear/netout.pth")
+     resize = 1
+
+     # testing begin
+-    for i in range(100):
++    for i in range(1):
+         image_path = "./curve/test.jpg"
+         img_raw = cv2.imread(image_path, cv2.IMREAD_COLOR)
+-
+         img = np.float32(img_raw)
+
+-        im_height, im_width, _ = img.shape
+-        scale = torch.Tensor([img.shape[1], img.shape[0], img.shape[1], img.shape[0]])
++        im_height, im_width, _ = img.shape  # (624, 1024, 3)
++        scale = torch.Tensor(
++            [img.shape[1], img.shape[0], img.shape[1], img.shape[0]])
+         img -= (104, 117, 123)
+         img = img.transpose(2, 0, 1)
+         img = torch.from_numpy(img).unsqueeze(0)
+         img = img.to(device)
++        if True:
++            import pickle
++            file_wb = "./curve/input.bin"
++            with open(file_wb, 'wb') as fin:
++                pickle.dump(img, fin)
++            pass
++        if S_INPUT_BIN:
++            import pickle
++            pickFile = "./curve/input.bin"
++            with open(pickFile, "rb") as fin:
++                img = pickle.load(fin)
++            pass
++        # img = torch.from_numpy(img)
+         scale = scale.to(device)
+
+         tic = time.time()
+-        loc, conf, landms = net(img)  # forward pass
++        loc, conf, landms = net(img)
+         print('net forward time: {:.4f}'.format(time.time() - tic))
+
++        if S_DUMP:
++            import sys
++            TOP = "."
++            if os.path.exists("{}/Pytorch_Retinaface/pylib".format(TOP)):
++                sys.path.append("{}".format(TOP))
++            else:
++                sys.path.append(
++                    "/data/shuangquan.he/workspace/gitcode/projcode/trysdk/pylibs"
++                )
++            if True:
++                import pylib.pyutil.Utils as utils
++            out_data = [loc.numpy(), conf.numpy(), landms.numpy()]
++            utils.dumpPickle(out_data, 'out_target')
++            pass
++        if False:
++            import torch.onnx
++            import netron
++            onnx_path = "./testmodel.onnx"
++            if os.path.exists(onnx_path):
++                os.remove(onnx_path)
++            torch.onnx.export(net, img, onnx_path)
++            netron.start(onnx_path)
++            pdb.set_trace()
++            pass
+         priorbox = PriorBox(cfg, image_size=(im_height, im_width))
+         priors = priorbox.forward()
+         priors = priors.to(device)
+@@ -109,10 +186,13 @@ if __name__ == '__main__':
+         boxes = boxes * scale / resize
+         boxes = boxes.cpu().numpy()
+         scores = conf.squeeze(0).data.cpu().numpy()[:, 1]
+-        landms = decode_landm(landms.data.squeeze(0), prior_data, cfg['variance'])
+-        scale1 = torch.Tensor([img.shape[3], img.shape[2], img.shape[3], img.shape[2],
+-                               img.shape[3], img.shape[2], img.shape[3], img.shape[2],
+-                               img.shape[3], img.shape[2]])
++        landms = decode_landm(landms.data.squeeze(0), prior_data,
++                              cfg['variance'])
++        scale1 = torch.Tensor([
++            img.shape[3], img.shape[2], img.shape[3], img.shape[2],
++            img.shape[3], img.shape[2], img.shape[3], img.shape[2],
++            img.shape[3], img.shape[2]
++        ])
+         scale1 = scale1.to(device)
+         landms = landms * scale1 / resize
+         landms = landms.cpu().numpy()
+@@ -130,7 +210,8 @@ if __name__ == '__main__':
+         scores = scores[order]
+
+         # do NMS
+-        dets = np.hstack((boxes, scores[:, np.newaxis])).astype(np.float32, copy=False)
++        dets = np.hstack((boxes, scores[:, np.newaxis])).astype(np.float32,
++                                                                copy=False)
+         keep = py_cpu_nms(dets, args.nms_threshold)
+         # keep = nms(dets, args.nms_threshold,force_cpu=args.cpu)
+         dets = dets[keep, :]
+@@ -139,7 +220,6 @@ if __name__ == '__main__':
+         # keep top-K faster NMS
+         dets = dets[:args.keep_top_k, :]
+         landms = landms[:args.keep_top_k, :]
+-
+         dets = np.concatenate((dets, landms), axis=1)
+
+         # show image
+@@ -149,11 +229,12 @@ if __name__ == '__main__':
+                     continue
+                 text = "{:.4f}".format(b[4])
+                 b = list(map(int, b))
+-                cv2.rectangle(img_raw, (b[0], b[1]), (b[2], b[3]), (0, 0, 255), 2)
++                cv2.rectangle(img_raw, (b[0], b[1]), (b[2], b[3]), (0, 0, 255),
++                              2)
+                 cx = b[0]
+                 cy = b[1] + 12
+-                cv2.putText(img_raw, text, (cx, cy),
+-                            cv2.FONT_HERSHEY_DUPLEX, 0.5, (255, 255, 255))
++                cv2.putText(img_raw, text, (cx, cy), cv2.FONT_HERSHEY_DUPLEX,
++                            0.5, (255, 255, 255))
+
+                 # landms
+                 cv2.circle(img_raw, (b[5], b[6]), 1, (0, 0, 255), 4)
+@@ -162,7 +243,4 @@ if __name__ == '__main__':
+                 cv2.circle(img_raw, (b[11], b[12]), 1, (0, 255, 0), 4)
+                 cv2.circle(img_raw, (b[13], b[14]), 1, (255, 0, 0), 4)
+             # save image
+-
+-            name = "test.jpg"
+-            cv2.imwrite(name, img_raw)
+-
++            cv2.imwrite("./curve/result_ruilai.jpg", img_raw)
+diff --git a/main_myself.py b/main_myself.py
+new file mode 100755
+index 0000000..ffa7b78
+--- /dev/null
++++ b/main_myself.py
+@@ -0,0 +1,473 @@
++import os
++import argparse
++import torch
++import torch.backends.cudnn as cudnn
++import numpy as np
++from data import cfg_mnet, cfg_re50
++from layers.functions.prior_box import PriorBox
++from utils.nms.py_cpu_nms import py_cpu_nms
++import cv2
++from models.retinaface import RetinaFace
++from utils.box_utils import decode, decode_landm
++import time
++import pdb
++import pickle
++import logging
++import lyngor
++import sys
++import onnxruntime
++from tensorboardX import SummaryWriter
++import netron
++
++SHELL_TOP = os.environ['TOP']
++TOP = "{}/Pytorch_Retinaface".format(SHELL_TOP)
++if os.path.exists("{}/pylib".format(TOP)):
++    sys.path.append("{}".format(TOP))
++else:
++    sys.path.append(
++        "/data/shuangquan.he/workspace/gitcode/projcode/trysdk/pylibs")
++if True:
++    import pylib.pyutil.Utils as gutil
++    import pylib.lynpy.lynpy as lynpy
++    import pylib.pyutil.Pmodel as gmodel
++    import pylib.pyutil.Measure as gmeasure
++    from pylib.pyutil.Gconf import gconf
++
++parser = argparse.ArgumentParser(description='Retinaface')
++parser.add_argument('-m',
++                    '--trained_model',
++                    default='./weights/Resnet50_Final.pth',
++                    type=str,
++                    help='Trained state_dict file path to open')
++parser.add_argument('--network',
++                    default='resnet50',
++                    help='Backbone network mobile0.25 or resnet50')
++parser.add_argument('--cpu',
++                    action="store_true",
++                    default=True,
++                    help='Use cpu inference')
++parser.add_argument('--confidence_threshold',
++                    default=0.02,
++                    type=float,
++                    help='confidence_threshold')
++parser.add_argument('--top_k', default=5000, type=int, help='top_k')
++parser.add_argument('--nms_threshold',
++                    default=0.4,
++                    type=float,
++                    help='nms_threshold')
++parser.add_argument('--keep_top_k', default=750, type=int, help='keep_top_k')
++parser.add_argument('-s',
++                    '--save_image',
++                    action="store_true",
++                    default=True,
++                    help='show detection results')
++parser.add_argument('--vis_thres',
++                    default=0.6,
++                    type=float,
++                    help='visualization_threshold')
++parser.add_argument('--target', default='myself', help='[target, myself]')
++args = parser.parse_args()
++
++gconf.MODE = args.target
++g_timeGap = []
++
++
++def init_setting():
++    global logger
++    logger = logging.getLogger("inlet")
++    logger.setLevel('DEBUG')
++    FORMAT_DATE = "%Y-%m-%d %H:%M:%S"
++    FORMAT_INFO = "inlet// %(asctime)s %(levelname)s %(funcName)10s[l:%(lineno)d p:%(process)d t:%(thread)d]: %(message)s"
++    formatter = logging.Formatter(FORMAT_INFO, FORMAT_DATE)
++
++    chlr = logging.StreamHandler()
++    chlr.setFormatter(formatter)
++    # print(os.path.abspath(__file__))
++    # code_path, cwd_file = os.path.split(os.path.abspath(__file__))
++    code_path = "."
++    proj_path = os.path.dirname(code_path)
++    # temp_path = os.path.join(code_path, './dump_log')
++    temp_path = os.path.join(TOP, 'dump_log')
++
++    if not os.path.exists(temp_path):
++        os.makedirs(temp_path)
++    fhlr = logging.FileHandler(os.path.join(temp_path, 'logger.log'), mode='w')
++    fhlr.setFormatter(formatter)
++
++    logger.addHandler(chlr)
++    logger.addHandler(fhlr)
++
++
++def modelByLynpy(lynModelPath=None, input=None):
++    import torch
++    if isinstance(input, torch.Tensor):
++        input = input.numpy()
++
++    model = lynpy.Model(path=lynModelPath)
++    logger.debug("model:{}".format(model))
++    input = model.input_tensor().from_numpy(input).apu()
++    output = model(input).cpu().numpy()
++    logger.debug("[out]shape:{} type:{}".format(output.shape, output.dtype))
++
++    # config above
++    output_fp32 = np.frombuffer(output.tobytes(), np.float32)
++    output_fp32.shape, type(output_fp32)
++
++    output0 = output_fp32[:67200]
++    output1 = output_fp32[67200:100800]
++    output2 = output_fp32[100800:]
++    logger.debug("output0:{}, output1:{}, output2:{}, {}".format(
++        len(output0), len(output1), len(output2), type(output0)))
++
++    # # reti.start
++    # output0 = output0.reshape(4, 16800).transpose(1, 0)
++    # output1 = output1.reshape(2, 16800).transpose(1, 0)
++    # output2 = output2.reshape(10, 16800).transpose(1, 0)
++    # # reti.end
++
++    output_torch0 = output0.reshape((1, 16800, 4))
++    output_torch1 = output1.reshape((1, 16800, 2))
++    output_torch2 = output2.reshape((1, 16800, 10))
++    logger.debug("output_torch0:{}, {}".format(output_torch0.shape,
++                                               type(output_torch0)))
++
++    ret = [output_torch0, output_torch1, output_torch2]
++    if gconf.HASDUMP:
++        file_wb = "{}/dump_log/output_myself.bin".format(TOP)
++        with open(file_wb, 'wb') as fin:
++            pickle.dump(ret, fin)
++    return ret
++
++
++def modelByRuntime(lynModelPath=None, input=None):
++    import torch
++    if isinstance(input, torch.Tensor):
++        input = input.numpy()
++    input = np.ascontiguousarray(input)
++
++    # for profile
++    modelLyn = lyngor.loader.load(path=lynModelPath, device=0, PDT=False)
++    modelLyn.run(data_format='numpy', **{"input0": input})
++    ret = modelLyn.get_output(data_format='numpy')
++    logger.debug("len ret: {}".format(len(ret)))
++    for i in range(len(ret)):
++        logger.debug("{}: {}".format(i, ret[i].shape))
++
++    if gconf.HASDUMP:
++        file_wb = "{}/dump_log/output_myself.bin".format(TOP)
++        with open(file_wb, 'wb') as fin:
++            pickle.dump(ret, fin)
++    return ret
++
++
++def modelInlet(lynModelPath=None, input=None):
++    if gconf.MYSELF.RUNMODE == "runtime":
++        return modelByRuntime(lynModelPath=lynModelPath, input=input)
++    elif gconf.MYSELF.RUNMODE == "lynpy":
++        return modelByLynpy(lynModelPath=lynModelPath, input=input)
++    else:
++        logger.debug("cannot support the runmode")
++    return None
++
++
++def check_keys(model, pretrained_state_dict):
++    ckpt_keys = set(pretrained_state_dict.keys())
++    model_keys = set(model.state_dict().keys())
++    used_pretrained_keys = model_keys & ckpt_keys
++    unused_pretrained_keys = ckpt_keys - model_keys
++    missing_keys = model_keys - ckpt_keys
++    print('Missing keys:{}'.format(len(missing_keys)))
++    print('Unused checkpoint keys:{}'.format(len(unused_pretrained_keys)))
++    print('Used keys:{}'.format(len(used_pretrained_keys)))
++    assert len(
++        used_pretrained_keys) > 0, 'load NONE from pretrained checkpoint'
++    return True
++
++
++def remove_prefix(state_dict, prefix):
++    ''' Old style model is stored with all names of parameters sharing common prefix 'module.' '''
++    print('remove prefix \'{}\''.format(prefix))
++
++    def f(x):
++        return x.split(prefix, 1)[-1] if x.startswith(prefix) else x
++
++    return {f(key): value for key, value in state_dict.items()}
++
++
++def load_model(model, pretrained_path, load_to_cpu):
++    print('Loading pretrained model from {}'.format(pretrained_path))
++    if load_to_cpu:
++        pretrained_dict = torch.load(pretrained_path,
++                                     map_location=lambda storage, loc: storage)
++    else:
++        device = torch.cuda.current_device()
++        pretrained_dict = torch.load(
++            pretrained_path,
++            map_location=lambda storage, loc: storage.cuda(device))
++    if "state_dict" in pretrained_dict.keys():
++        pretrained_dict = remove_prefix(pretrained_dict['state_dict'],
++                                        'module.')
++    else:
++        pretrained_dict = remove_prefix(pretrained_dict, 'module.')
++    check_keys(model, pretrained_dict)
++    model.load_state_dict(pretrained_dict, strict=False)
++    return model
++
++
++def inletInfer():
++    if gconf.MODE == "target":
++        torch.set_grad_enabled(False)
++        cfg = None
++        if args.network == "mobile0.25":
++            cfg = cfg_mnet
++        elif args.network == "resnet50":
++            cfg = cfg_re50
++        # net and model
++        net = RetinaFace(cfg=cfg, phase='test')
++        net = load_model(net, args.trained_model, args.cpu)
++        net.eval()
++        print('Finished loading model!')
++        if gconf.HASDUMP:
++            logger.debug("net.state_dict {}".format(net.state_dict()))
++            torch.save(net.state_dict(),
++                       "{}/dump_log/target_net.sd".format(TOP))
++            targetModelFile = "{}/dump_log/target_net.pth".format(TOP)
++            torch.save(net, targetModelFile)
++
++            # 保存为pth的其它方式
++            # trace = torch.jit.trace(
++            #     net, example_inputs=[torch.rand(1, 3, 640, 640)])
++            # torch.jit.save(trace, "{}/dump_log/target_net2.pth".format(TOP))
++            pass
++        cudnn.benchmark = True
++        device = torch.device("cpu" if args.cpu else "cuda")
++        resize = 1
++        net = net.to(device)
++
++        if gconf.HASDUMP:
++            tempFile = '{}/dump_log/target_onnx.onnx'.format(TOP)
++            tempInput = ["input0"]
++            tempOutput = ["output0", "output1", "output2"]
++            inputs = torch.randn((1, 3, 640, 640)).to(device)
++            torch_out = torch.onnx._export(net,
++                                           inputs,
++                                           tempFile,
++                                           export_params=True,
++                                           verbose=False,
++                                           input_names=tempInput,
++                                           output_names=tempOutput)
++            if os.path.exists(tempFile):
++                logger.debug("onnx file {}".format(tempFile))
++                # 在浏览器中展示网络结构的话可打开查看结构
++                # netron.start(tempFile)
++            pass
++    elif gconf.MODE == "myself":
++        torch.set_grad_enabled(False)
++        cfg = None
++        if args.network == "mobile0.25":
++            cfg = cfg_mnet
++        elif args.network == "resnet50":
++            cfg = cfg_re50
++        device = torch.device("cpu" if args.cpu else "cuda")
++        resize = 1
++    else:
++        pass
++
++    if gconf.MYSELF.MODELFILE:
++        tempModelFile = "{}/{}".format(TOP, gconf.MYSELF.MODELFILE)
++        global modelLyn
++        # pdb.set_trace()
++        modelLyn = lynpy.Model(path="{}/Net_0".format(tempModelFile))
++        # modelLyn = lyngor.loader.load(path="{}/Net_0".format(tempModelFile),
++        #                               device=0,
++        #                               PDT=False)
++
++    loopMax = 1
++    for i in range(loopMax):
++        if gconf.INPUTTYPE == "file":
++            if not gconf.INPUTIMAGE:
++                imagePath = "{}/curve/test.jpg".format(TOP)
++            else:
++                imagePath = "{}/{}".format(TOP, gconf.INPUTIMAGE)
++            img = cv2.imread(imagePath, cv2.IMREAD_COLOR)
++            if gconf.MODE == "target":
++                img = img.astype(np.float32)
++                pass
++            elif gconf.MODE == "myself":
++                # 手动版准备输入uint8, imread默认输出就是uint8
++                pass
++            else:
++                pass
++
++            img = cv2.resize(img, (640, 640), interpolation=cv2.INTER_LINEAR)
++            img_raw = img
++            scale = torch.Tensor(
++                [img.shape[1], img.shape[0], img.shape[1], img.shape[0]])
++
++            im_height, im_width, _ = img.shape
++            img = img.transpose(2, 0, 1)  #hwc -> chw
++            img = img[np.newaxis, :]
++            img = torch.from_numpy(img).to(device)
++            scale = scale.to(device)
++            if gconf.HASDUMP:
++                tempFile = "{}/dump_log/input_myself.bin".format(TOP)
++                with open(tempFile, 'wb') as fin:
++                    pickle.dump(img, fin)
++                pass
++        elif gconf.INPUTTYPE == "bin":
++            # todo something wrong with the session
++            if gconf.INPUTDATA == "":
++                img = gutil.loadPickle("{}/dump_log/input.bin".format(TOP))
++                img_raw = img
++            scale = torch.Tensor([640, 640, 640, 640])
++            im_height, im_width = (640, 640)
++
++        # infer
++        if gconf.MODE == "myself":
++            if not gconf.MYSELF.MODELFILE:
++                targetModelFile = "{}/dump_log/target_net.pth".format(TOP)
++                if not os.path.exists(targetModelFile):
++                    logger.error("cannot found {}".format(targetModelFile))
++                    sys.exit(1)
++                myselfModelFile = "{}/dump_log/model_myself".format(TOP)
++                gmodel.pmodel_inletv4(modelType="Pytorch",
++                                      modelFile=targetModelFile,
++                                      buildType='apu',
++                                      inputPart={'input0': (1, 3, 640, 640)},
++                                      outputPart=None,
++                                      outputPath=myselfModelFile)
++            else:
++                myselfModelFile = "{}/{}".format(TOP, gconf.MYSELF.MODELFILE)
++
++            timeStart = time.perf_counter()
++            ret = modelInlet(lynModelPath="{}/Net_0".format(myselfModelFile),
++                             input=img)
++            timeGap = time.perf_counter() - timeStart
++            g_timeGap.append(timeGap)
++
++            loc = torch.from_numpy(ret[0])
++            conf = torch.from_numpy(ret[1])
++            landms = torch.from_numpy(ret[2])
++        elif gconf.MODE == "target":
++            # for tensorboard
++            with SummaryWriter("{}/dump_log/swlog".format(TOP),
++                               comment="bjruilai") as sw:
++                sw.add_graph(net, torch.rand([1, 3, 640, 640]))
++
++            timeStart = time.perf_counter()
++            loc, conf, landms = net(img)
++            timeGap = time.perf_counter() - timeStart
++            g_timeGap.append(timeGap)
++
++            ret = [loc.numpy(), conf.numpy(), landms.numpy()]
++            gutil.dumpPickleAbs(ret,
++                                "{}/dump_log/output_target.bin".format(TOP))
++
++            onnxFile = "{}/dump_log/target_onnx.onnx".format(TOP)
++            if gconf.HASDUMP and os.path.exists(onnxFile):
++                # verify onnx_model
++                sess = onnxruntime.InferenceSession(onnxFile)
++                input_name = sess.get_inputs()[0].name
++
++                output_name0 = sess.get_outputs()[0].name
++                output_name1 = sess.get_outputs()[1].name
++                output_name2 = sess.get_outputs()[2].name
++                pred_onnx = sess.run(
++                    [output_name0, output_name1, output_name2],
++                    {input_name: img.numpy()})
++                gutil.dumpPickleAbs(pred_onnx,
++                                    "{}/dump_log/output_onnx.bin".format(TOP))
++                pass
++        else:
++            logger.error("cannot support the option")
++            sys.exit(1)
++
++        if gconf.HASDUMP and gconf.MYSELF.ERRORRATE:
++            outTarget = gutil.loadPickle(
++                "{}/dump_log/output_target.bin".format(TOP))
++            outMyself = gutil.loadPickle(
++                "{}/dump_log/output_myself.bin".format(TOP))
++            if os.path.exists("{}/dump_log/output_target.bin".format(TOP)) and \
++                os.path.exists("{}/dump_log/output_myself.bin".format(TOP)):
++                gmeasure.measure_inlet(outTarget, outMyself)
++
++        priorbox = PriorBox(cfg, image_size=(im_height, im_width))
++        priors = priorbox.forward()
++        priors = priors.to(device)
++        prior_data = priors.data
++        boxes = decode(loc.data.squeeze(0), prior_data, cfg['variance'])
++        boxes = boxes * scale / resize
++        boxes = boxes.cpu().numpy()
++        scores = conf.squeeze(0).data.cpu().numpy()[:, 1]
++        landms = decode_landm(landms.data.squeeze(0), prior_data,
++                              cfg['variance'])
++        scale1 = torch.Tensor([
++            img.shape[3], img.shape[2], img.shape[3], img.shape[2],
++            img.shape[3], img.shape[2], img.shape[3], img.shape[2],
++            img.shape[3], img.shape[2]
++        ])
++        scale1 = scale1.to(device)
++        landms = landms * scale1 / resize
++        landms = landms.cpu().numpy()
++
++        # ignore low scores
++        inds = np.where(scores > args.confidence_threshold)[0]
++        boxes = boxes[inds]
++        landms = landms[inds]
++        scores = scores[inds]
++
++        # keep top-K before NMS
++        order = scores.argsort()[::-1][:args.top_k]
++        boxes = boxes[order]
++        landms = landms[order]
++        scores = scores[order]
++
++        # do NMS
++        dets = np.hstack((boxes, scores[:, np.newaxis])).astype(np.float32,
++                                                                copy=False)
++        keep = py_cpu_nms(dets, args.nms_threshold)
++        # keep = nms(dets, args.nms_threshold,force_cpu=args.cpu)
++        dets = dets[keep, :]
++        landms = landms[keep]
++
++        # keep top-K faster NMS
++        dets = dets[:args.keep_top_k, :]
++        landms = landms[:args.keep_top_k, :]
++        dets = np.concatenate((dets, landms), axis=1)
++
++        # show image
++        if args.save_image:
++            for b in dets:
++                if b[4] < args.vis_thres:
++                    continue
++                text = "{:.4f}".format(b[4])
++                b = list(map(int, b))
++                cv2.rectangle(img_raw, (b[0], b[1]), (b[2], b[3]), (0, 0, 255),
++                              2)
++                cx = b[0]
++                cy = b[1] + 12
++                cv2.putText(img_raw, text, (cx, cy), cv2.FONT_HERSHEY_DUPLEX,
++                            0.5, (255, 255, 255))
++
++                # landms
++                cv2.circle(img_raw, (b[5], b[6]), 1, (0, 0, 255), 4)
++                cv2.circle(img_raw, (b[7], b[8]), 1, (0, 255, 255), 4)
++                cv2.circle(img_raw, (b[9], b[10]), 1, (255, 0, 255), 4)
++                cv2.circle(img_raw, (b[11], b[12]), 1, (0, 255, 0), 4)
++                cv2.circle(img_raw, (b[13], b[14]), 1, (255, 0, 0), 4)
++            # save image
++            cv2.imwrite("{}/dump_log/result_{}.jpg".format(TOP, gconf.MODE),
++                        img_raw)
++        pass
++    pass  # for
++
++    tempVar = np.sum(g_timeGap) / len(g_timeGap)
++    logger.info('平均推理时长:{}, 平均帧率:{}'.format(tempVar, 1 / tempVar))
++    pass
++
++
++if __name__ == '__main__':
++    init_setting()
++    inletInfer()
++
++    # import cProfile
++    # cProfile.run('inletInfer()', filename="./profile.out", sort="cumulative")
++    pass
+diff --git a/pylib/lynpy/__init__.py b/pylib/lynpy/__init__.py
+new file mode 100755
+index 0000000..e69de29
+diff --git a/pylib/lynpy/lynpy.py b/pylib/lynpy/lynpy.py
+new file mode 100755
+index 0000000..425f9ae
+--- /dev/null
++++ b/pylib/lynpy/lynpy.py
+@@ -0,0 +1,530 @@
++# -*- coding: utf-8 -*-
++"""
++============================================================
++© 2018 北京灵汐科技有限公司 版权所有。
++* 注意：
++以下内容均为北京灵汐科技有限公司原创，
++未经本公司允许，不得转载，否则将视为侵权；
++对于不遵守此声明或者其他违法使用以下内容者，
++本公司依法保留追究权。
++
++© 2018 Lynxi Technologies Co., Ltd. All rights reserved.
++* NOTICE:
++All information contained here is,
++and remains the property of Lynxi.
++This file can not be copied or distributed without
++the permission of Lynxi Technologies Co., Ltd.
++============================================================
++
++@file: lynpy.py
++@author: huangfei.xiao@lynxi.com
++
++"""
++
++import numpy as np
++import sys
++
++sys.path.append('/usr/lib')
++import pylynchipsdk as sdk
++
++SDK_DTYPE = {
++    sdk.lyn_data_type_t.DT_INT8: 'int8',
++    sdk.lyn_data_type_t.DT_UINT8: 'uint8',
++    sdk.lyn_data_type_t.DT_INT32: 'int32',
++    sdk.lyn_data_type_t.DT_UINT32: 'uint32',
++    sdk.lyn_data_type_t.DT_FLOAT: 'float32',
++    sdk.lyn_data_type_t.DT_FLOAT16: 'float16',
++}
++
++
++class Tensor(object):
++    '''lynpy.Tensor is a common data object which used to manage the data on device memory.
++    '''
++
++    def __init__(self, dev_id=0, size=0, allocate=True):
++        """init function.
++
++        Parameters
++        ----------
++        dev_id : int32
++            set which the device to be used.
++
++        size : int32
++            the tensor size in bytes.
++
++        allocate : True or False
++            True, will allcate device memory when create tensor.
++            False, allcate when tensor.apu(), or can set tensor.devptr manually.
++        """
++        super(Tensor, self).__init__()
++        self.__numpydata = None
++        self.devptr = None
++        self.__child = False
++        self.data_size = size
++        self.dev_id = dev_id
++
++        ##
++        # from numpy
++        self.shape = None
++        self.dtype = None
++        self.size = 0
++        self.itemsize = 0
++
++        self.context, ret = sdk.lyn_create_context(self.dev_id)
++        assert ret == 0
++
++        ##
++        # for split case, not need to allocate device memory
++        if (self.data_size != 0) and (allocate == True):
++            self.devptr, ret = sdk.lyn_malloc(self.data_size)
++            assert ret == 0
++
++    def __del__(self):
++        if (self.devptr != None) and (self.__child == False):
++            sdk.lyn_set_current_context(self.context)
++            sdk.lyn_free(self.devptr)
++        self.__numpydata = None
++        self.devptr = None
++        self.data_size = 0
++
++        sdk.lyn_destroy_context(self.context)
++
++    def __str__(self):
++        msg = 'Tensor: {} {} \n{}'.format(self.__numpydata.shape,
++                                          self.__numpydata.dtype,
++                                          str(self.__numpydata))
++        return msg
++
++    def __update_numpydata_info(self):
++        self.shape = self.__numpydata.shape
++        self.dtype = self.__numpydata.dtype
++        self.size = self.__numpydata.size
++        self.itemsize = self.__numpydata.itemsize
++
++    def from_numpy(self, data):
++        """set tensor.apu() source data or tensor.cpu() destination data.
++
++        Parameters
++        ----------
++        data : numpy.ndarray or List[numpy.ndarray]
++
++        Returns
++        -------
++        Tensor : reference to self.
++        """
++        total_size = 0
++        self.__numpydata = []
++
++        if isinstance(data, list):
++            for d in data:
++                assert isinstance(d, np.ndarray)
++
++                if d.flags["C_CONTIGUOUS"] == False:
++                    self.__numpydata.append(np.ascontiguousarray(d))
++                else:
++                    self.__numpydata.append(d)
++
++                total_size = total_size + d.size * d.itemsize
++        elif isinstance(data, np.ndarray):
++            if data.flags["C_CONTIGUOUS"] == False:
++                self.__numpydata = np.ascontiguousarray(data)
++            else:
++                self.__numpydata = data
++
++            total_size = data.size * data.itemsize
++            self.__update_numpydata_info()
++        else:
++            assert 0
++
++        if self.data_size == 0:
++            self.data_size = total_size
++
++        assert self.data_size == total_size, 'required {}, input {}'.format(
++            self.data_size, total_size)
++        return self
++
++    def view_as(self, shape, dtype='float32'):
++        """change the view of data shape/dtype, will not change the data in memory.
++
++        Parameters
++        ----------
++        shape : Tuple
++
++        dtype : numpy.dtype
++
++        Returns
++        -------
++        Tensor : reference to self.
++        """
++        if self.__numpydata is None:
++            data = np.empty(shape, dtype=dtype)
++            assert self.data_size == data.size * \
++                data.itemsize, 'required {}, input {}'.format(
++                    self.data_size, data.size * data.itemsize)
++            self.__numpydata = data
++        else:
++            # force convert
++            self.__numpydata.dtype = dtype
++            self.__numpydata.shape = shape
++
++        self.__update_numpydata_info()
++        return self
++
++    def numpy(self):
++        '''return the numpy object'''
++        return self.__numpydata
++
++    def cpu(self):
++        '''copy data from server to device'''
++        assert self.data_size != 0
++        assert self.devptr != None
++
++        if self.__numpydata is None:
++            self.__numpydata = np.empty(self.data_size, dtype=np.byte)
++            self.__update_numpydata_info()
++
++        sdk.lyn_set_current_context(self.context)
++
++        if isinstance(self.__numpydata, np.ndarray):
++            assert 0 == sdk.lyn_memcpy(sdk.lyn_numpy_to_ptr(self.__numpydata),
++                                       self.devptr, self.data_size,
++                                       sdk.lyn_memcpy_dir_t.ServerToClient)
++        else:  # numpy list
++            offset = 0
++            for d in self.__numpydata:
++                size = d.size * d.itemsize
++                assert 0 == sdk.lyn_memcpy(
++                    sdk.lyn_numpy_to_ptr(d),
++                    sdk.lyn_addr_seek(self.devptr, offset), size,
++                    sdk.lyn_memcpy_dir_t.ServerToClient)
++                offset = offset + size
++
++                assert offset > self.data_size  # overflow
++
++        return self
++
++    def apu(self):
++        '''copy data from device to server'''
++        assert self.data_size != 0
++        assert self.__numpydata is not None
++
++        sdk.lyn_set_current_context(self.context)
++
++        if self.devptr == None:
++            self.devptr, ret = sdk.lyn_malloc(self.data_size)
++            assert ret == 0
++
++        if isinstance(self.__numpydata, np.ndarray):
++            assert 0 == sdk.lyn_memcpy(self.devptr,
++                                       sdk.lyn_numpy_to_ptr(self.__numpydata),
++                                       self.data_size,
++                                       sdk.lyn_memcpy_dir_t.ClientToServer)
++        else:  # numpy list
++            offset = 0
++            for d in self.__numpydata:
++                size = d.size * d.itemsize
++                assert 0 == sdk.lyn_memcpy(
++                    sdk.lyn_addr_seek(self.devptr, offset),
++                    sdk.lyn_numpy_to_ptr(d), size,
++                    sdk.lyn_memcpy_dir_t.ClientToServer)
++                offset = offset + size
++
++        return self
++
++    def split(self, size_list):
++        """split a tensor to tensor list.
++
++        Parameters
++        ----------
++        size_list : List[int32]
++            a list of size in bytes
++
++        Returns
++        -------
++        Tensor : List[Tensor]
++        """
++        assert self.devptr != None
++
++        result = []
++        offset = 0
++
++        if self.__numpydata is not None:
++            data = self.__numpydata.flatten()
++            data.dtype = np.int8
++
++        for size in size_list:
++            if offset + size > self.data_size:
++                break
++
++            new_obj = Tensor(dev_id=self.dev_id, size=size, allocate=False)
++            new_obj.devptr = sdk.lyn_addr_seek(self.devptr, offset)
++            new_obj.__child = True
++
++            if self.__numpydata is not None:
++                new_obj = new_obj.from_numpy(data[offset:offset + size])
++            result.append(new_obj)
++
++            offset = offset + size
++
++        if offset < self.data_size:
++            size = self.data_size - offset
++            new_obj = Tensor(dev_id=self.dev_id, size=size, allocate=False)
++            new_obj.devptr = sdk.lyn_addr_seek(self.devptr, offset)
++            new_obj.__child = True
++
++            if self.__numpydata is not None:
++                new_obj = new_obj.from_numpy(data[offset:])
++            result.append(new_obj)
++
++        return result
++
++    def copy_to(self, to, stream=None):
++        """copy data to another tensor. support copy tensor over device.
++
++        Parameters
++        ----------
++        stream : sdk stream object
++            if stream not none, will use asynchronous copy method.
++            will be ignored when copy tensor over device
++        """
++        assert self.data_size == to.data_size, 'required {}, input {}'.format(
++            self.data_size, to.data_size)
++        assert self.devptr != None and to.devptr != None
++
++        if self.dev_id == to.dev_id:
++            sdk.lyn_set_current_context(self.context)
++
++            if stream == None:
++                assert 0 == sdk.lyn_memcpy(to.devptr, self.devptr,
++                                           self.data_size,
++                                           sdk.lyn_memcpy_dir_t.ServerToServer)
++            else:
++                assert 0 == sdk.lyn_memcpy_async(
++                    stream, to.devptr, self.devptr, self.data_size,
++                    sdk.lyn_memcpy_dir_t.ServerToServer)
++
++            if self.__numpydata is not None:
++                to.from_numpy(self.__numpydata)
++        else:
++            self.cpu()
++            to.from_numpy(self.__numpydata)
++            to.apu()
++
++
++class Model(object):
++    '''lynpy.Model is a module to do inference.
++    '''
++
++    def __init__(self, dev_id=0, path=None, stream=None, sync=True):
++        """init function.
++
++        Parameters
++        ----------
++        dev_id : int32
++            set which the device to be used.
++
++        path : str
++            the model file path.
++
++        stream : sdk stream object
++            if not set, will create a default stream.
++            also can use the others stream by Model.stream.
++
++        sync : True or False
++            True, blocking wait the infering done.
++            False, should call Model.synchronize() before accsess output data.
++        """
++        super(Model, self).__init__()
++        self.path = path
++        self.dev_id = dev_id
++        self.sync = sync
++        self.stream = stream
++        self.model = None
++        self.__input = None
++        self.__output = None
++        self.__input_list = None
++        self.__output_list = None
++        self.input_size = 0
++        self.output_size = 0
++        self.batch_size = 0
++        self.__model_desc = None
++
++        self.context, ret = sdk.lyn_create_context(self.dev_id)
++        assert ret == 0
++
++        if self.stream == None:
++            self.stream, ret = sdk.lyn_create_stream()
++            assert ret == 0
++
++        if self.path != None:
++            self.load()
++
++    def __del__(self):
++        self.unload()
++        sdk.lyn_destroy_stream(self.stream)
++        sdk.lyn_destroy_context(self.context)
++
++    def __call__(self, input, output=None):
++        '''do infering'''
++        return self.infer(input, output)
++
++    def load(self, path=None):
++        '''load model from file'''
++        if self.path == None:
++            self.path = path
++        assert self.path != None
++
++        sdk.lyn_set_current_context(self.context)
++        self.model, ret = sdk.lyn_load_model(self.path)
++        print("self.model: {}".format(self.model))
++        assert ret == 0
++
++        self.__model_desc, ret = sdk.lyn_model_get_desc(self.model)
++        self.batch_size = self.__model_desc.inputTensorAttrArray[0].batchSize
++
++        self.input_size, ret = sdk.lyn_model_get_input_data_total_len(
++            self.model)
++        self.output_size, ret = sdk.lyn_model_get_output_data_total_len(
++            self.model)
++
++        self.input_size *= self.batch_size
++        self.output_size *= self.batch_size
++
++    def unload(self):
++        '''unload model'''
++        if self.model != None:
++            sdk.lyn_set_current_context(self.context)
++            sdk.lyn_unload_model(self.model)
++            self.model = None
++
++    def infer(self, input: Tensor, output: Tensor = None) -> Tensor:
++        '''do infering, can set output tensor or create automatic'''
++        assert self.model != None
++        assert input.data_size == self.input_size, 'required {}, input {}'.format(
++            self.data_size, input.data_size)
++
++        self.__input = input
++        if output is not None:
++            assert output.data_size == self.output_size, 'required {}, input {}'.format(
++                self.output_size, output.data_size)
++            self.__output = output
++        elif self.__output is None:
++            self.__output = Tensor(dev_id=self.dev_id, size=self.output_size)
++
++        sdk.lyn_set_current_context(self.context)
++        assert 0 == sdk.lyn_execute_model_async(self.stream, self.model,
++                                                self.__input.devptr,
++                                                self.__output.devptr,
++                                                self.batch_size)
++
++        if self.sync == True:
++            assert 0 == sdk.lyn_synchronize_stream(self.stream)
++
++        return self.__output
++
++    def synchronize(self):
++        '''blocking wait for infering done'''
++        sdk.lyn_set_current_context(self.context)
++        assert 0 == sdk.lyn_synchronize_stream(self.stream)
++
++    def output_tensor(self):
++        if self.__output is None:
++            self.__output = Tensor(dev_id=self.dev_id, size=self.output_size)
++        return self.__output
++
++    def input_tensor(self):
++        if self.__input is None:
++            self.__input = Tensor(dev_id=self.dev_id, size=self.input_size)
++        return self.__input
++
++    def output_list(self):
++        """get output tensors as a list, view as below:
++
++            [batch0][tensor0, tensor1, ..., tensorX]
++            [batch1][tensor0, tensor1, ..., tensorX]
++            ...
++            [batchN][tensor0, tensor1, ..., tensorX]
++
++        Note:
++            output_list() tensors will keep the latest value with output_tensor() at device memory,
++            but the different value at host memory, you should use cpu() to synchronize data before access
++        """
++        if self.__output_list is None:
++            self.__output_list = []
++
++            if self.batch_size == 1:
++                batch_list = [self.output_tensor()]
++            else:
++                split_size = []
++                for i in range(self.batch_size):
++                    split_size.append(self.__model_desc.outputDataLen)
++                batch_list = self.output_tensor().split(split_size)
++
++            shape_list = []
++            dtype_list = []
++            tensor_size = []
++            tensor_num = self.__model_desc.outputTensorAttrArrayNum
++            for i in range(tensor_num):
++                shape, ret = sdk.lyn_model_get_output_tensor_dims_by_index(
++                    self.model, i)
++                dtype = self.__model_desc.outputTensorAttrArray[i].dtype
++                size = self.__model_desc.outputTensorAttrArray[i].dataLen
++                shape_list.append(shape)
++                dtype_list.append(SDK_DTYPE[dtype])
++                tensor_size.append(size)
++
++            for batch in batch_list:
++                tensor_list = batch.split(tensor_size)
++                for i in range(tensor_num):
++                    tensor_list[i].view_as(shape=shape_list[i],
++                                           dtype=dtype_list[i])
++
++                self.__output_list.append(tensor_list)
++
++        return self.__output_list
++
++    def input_list(self):
++        """get input tensors as a list, view as below:
++
++            [batch0][tensor0, tensor1, ..., tensorX]
++            [batch1][tensor0, tensor1, ..., tensorX]
++            ...
++            [batchN][tensor0, tensor1, ..., tensorX]
++
++        Note:
++            input_list() tensors will keep the latest value with input_tensor() at device memory,
++            but the different value at host memory, you should use cpu() to synchronize data before access
++        """
++        if self.__input_list is None:
++            self.__input_list = []
++
++            if self.batch_size == 1:
++                batch_list = [self.input_tensor()]
++            else:
++                split_size = []
++                for i in range(self.batch_size):
++                    split_size.append(self.__model_desc.inputDataLen)
++                batch_list = self.input_tensor().split(split_size)
++
++            shape_list = []
++            dtype_list = []
++            tensor_size = []
++            tensor_num = self.__model_desc.inputTensorAttrArrayNum
++            for i in range(tensor_num):
++                shape, ret = sdk.lyn_model_get_input_tensor_dims_by_index(
++                    self.model, i)
++                dtype = self.__model_desc.inputTensorAttrArray[i].dtype
++                size = self.__model_desc.inputTensorAttrArray[i].dataLen
++                shape_list.append(shape)
++                dtype_list.append(SDK_DTYPE[dtype])
++                tensor_size.append(size)
++
++            for batch in batch_list:
++                tensor_list = batch.split(tensor_size)
++                for i in range(tensor_num):
++                    tensor_list[i].view_as(shape=shape_list[i],
++                                           dtype=dtype_list[i])
++
++                self.__input_list.append(tensor_list)
++
++        return self.__input_list
+diff --git a/pylib/pyutil/Gconf.py b/pylib/pyutil/Gconf.py
+new file mode 100755
+index 0000000..68ecccc
+--- /dev/null
++++ b/pylib/pyutil/Gconf.py
+@@ -0,0 +1,35 @@
++#! /usr/bin/env python
++# coding=utf-8
++# ================================================================
++# brief:
++# gconf相关的全局配置
++# ================================================================
++
++from easydict import EasyDict as easydict
++
++gconf = easydict()
++
++# target: 运行适配前的模型, myself：运行适配后的模型, all: 两者同时运行
++gconf.MODE = "myself"
++# 是否序列化对象
++gconf.HASDUMP = True
++# 预处理后满足推理要求的序列化对象
++# bin, file
++gconf.INPUTTYPE = "file"
++gconf.INPUTDATA = ""
++# 待推理的图片
++gconf.INPUTIMAGE = ""
++
++# 客户相关的配置信息，关键字TARGET
++gconf.TARGET = easydict()
++# 客户的模型文件(eg: "model/temp.pth")
++gconf.TARGET.MODELFILE = ""
++
++# 自有相关的配置信息，关键字MYSELF
++gconf.MYSELF = easydict()
++# lyngor编译后的模型对象(eg: "model/temp", temp下应包含Net_0)
++gconf.MYSELF.MODELFILE = ""
++# ["lynpy", "runtime"]
++gconf.MYSELF.RUNMODE = "runtime"
++# 是否计算误差率
++gconf.MYSELF.ERRORRATE = True
+diff --git a/pylib/pyutil/Measure.py b/pylib/pyutil/Measure.py
+new file mode 100755
+index 0000000..e9623df
+--- /dev/null
++++ b/pylib/pyutil/Measure.py
+@@ -0,0 +1,73 @@
++import numpy as np
++
++
++def measure_basic(list_compare, identifier):
++    '''
++    统计学上的基本指标
++    '''
++    print("[均值_方差_标准差]{}: {}, {}, {}".format(identifier, np.mean(list_compare),
++                                             np.var(list_compare),
++                                             np.std(list_compare, ddof=1)))
++
++
++def measure_mse(list_target, list_compare, identifier):
++    '''
++    均方误差(MSE)是各数据偏离真实值差值的平方和的平均数
++    list_target  真实模型的推理结果
++    list_compare 编译模型的推理结果
++    '''
++    if not (isinstance(list_target, np.ndarray)
++            and isinstance(list_compare, np.ndarray)):
++        return None
++    ret = np.sum((np.float32(list_compare) - np.float32(list_target))**
++                 2) / len(list_target)
++    print("[均方误差MSE] 分段_{}: {}".format(identifier, ret))
++    return ret
++
++
++def measure_error_rate(list_target, list_compare, identifier):
++    '''
++    误差率：预测值相对真实值的误差值
++    list_target  真实模型的推理结果
++    list_compare 编译模型的推理结果
++    '''
++    ret = np.sqrt(np.sum((np.float32(list_compare) - np.float32(list_target))**2)) / \
++        np.sqrt(np.sum(np.float32(list_target)**2))
++    print("[误差率] 分段_{}: {}".format(identifier, ret))
++    return ret
++
++
++def measure_inlet(data_target, data_lynpy):
++    '''
++    data_target: [np0, np1, ...]
++    data_lynpy: [np0, np1, ...]
++    '''
++    # if not (data_target and data_lynpy):
++    #     print("warn: maybe none for input")
++    #     return None
++
++    # 多输出的分段评估
++    for index in range(len(data_target)):
++        data_flat_caffe = data_target[index].flatten()
++        data_flat_lynpy = data_lynpy[index].flatten()
++        measure_mse(data_flat_caffe, data_flat_lynpy, "{}".format(index))
++        measure_error_rate(data_flat_caffe, data_flat_lynpy,
++                           "{}".format(index))
++
++    # 多输出的整体评估
++    '''
++    data_caffe[0].numpy().flatten() pytorch -> numpy
++    tempTarget = np.concatenate(
++        (data_target[0].flatten(), data_target[1].flatten(),
++         data_target[2].flatten()),
++        axis=0)
++    tempMyself = np.concatenate(
++        (data_lynpy[0].flatten(), data_lynpy[1].flatten(),
++         data_lynpy[2].flatten()),
++        axis=0)
++    '''
++
++    tempTarget = np.concatenate([it.flatten() for it in data_target], axis=0)
++    tempMyself = np.concatenate([it.flatten() for it in data_lynpy], axis=0)
++    measure_mse(tempTarget, tempMyself, "整体")
++    measure_error_rate(tempTarget, tempMyself, "整体")
+diff --git a/pylib/pyutil/Pmodel.py b/pylib/pyutil/Pmodel.py
+new file mode 100755
+index 0000000..027752c
+--- /dev/null
++++ b/pylib/pyutil/Pmodel.py
+@@ -0,0 +1,228 @@
++import os
++# import torch
++import lyngor
++
++
++def pmodel_inlet(modelType="Pytorch", modelFile=""):
++    '''
++    modelType: Tensorflow Keras_tf Onnx Caffe Pytorch Mxnet
++    modelFile: 离线模型的相关路径
++    '''
++    print("[pmodel_inlet] lyngor version:{}, lyngor path:{}".format(
++        lyngor.version, lyngor))
++    if not os.path.exists(modelFile):
++        print("model file not exists.")
++
++    offlineModel = lyngor.DLModel()
++    # dlzhisheng.yolov3
++    # offlineModel.load(modelFile, model_type=modelType,
++    #                   inputs_dict={'input/input_data': (1, 416, 416, 3)},
++    #                   outputs=["pred_sbbox/concat_2", "pred_mbbox/concat_2",
++    #                            "pred_lbbox/concat_2"])
++
++    # dlzhisheng.yolov4
++    # offlineModel.load(modelFile, model_type=modelType,
++    #                   inputs_dict={'Placeholder': (1, 416, 416, 3)},
++    #                   outputs=["concat_9", "concat_10",
++    #                            "concat_11"])
++
++    # bjruilai
++    offlineModel.load(modelFile,
++                      model_type=modelType,
++                      inputs_dict={'input0': (1, 3, 640, 640)})
++
++    offlineBuilder = lyngor.Builder(target='apu', is_map=True)
++    r_engine = offlineBuilder.build(offlineModel.graph, offlineModel.params)
++
++
++def pmodel_inletv2(modelType="Pytorch",
++                   modelFile="",
++                   buildType="apu",
++                   outputPath=''):
++    '''
++    modelType: Tensorflow Keras_tf Onnx Caffe Pytorch Mxnet
++    modelFile: 离线模型的相关路径
++    buildType:
++        cpus: cpu模拟推理 (target='cpu', cpu_arch="x86", cc="g++")
++        apus: apu模拟推理 (target='apu', cpu_arch="x86", cc="g++")
++        apu:  apu板卡推理 (target='apu')
++    '''
++    print("[pmodel_inlet] lyngor version:{}, lyngor path:{}".format(
++        lyngor.version, lyngor))
++    if not os.path.exists(modelFile):
++        print("model file not exists.")
++
++    offlineModel = lyngor.DLModel()
++    # offlineModel.load(modelFile, model_type=modelType,
++    #                   inputs_dict={'input/input_data': (1, 416, 416, 3)},
++    #                   outputs=["pred_sbbox/concat_2", "pred_mbbox/concat_2",
++    #                            "pred_lbbox/concat_2"])
++
++    # bjruilai
++    offlineModel.load(modelFile,
++                      model_type=modelType,
++                      inputs_dict={'input0': (1, 3, 640, 640)})
++
++    if buildType == "cpus":
++        offlineBuilder = lyngor.Builder(target='cpu',
++                                        cpu_arch="x86",
++                                        cc="g++",
++                                        is_map=True)
++    elif buildType == "apus":
++        offlineBuilder = lyngor.Builder(target='apu',
++                                        cpu_arch="x86",
++                                        cc="g++",
++                                        is_map=True)
++    elif buildType == "apu":
++        offlineBuilder = lyngor.Builder(target='apu', is_map=True)
++    else:
++        print("cannot support the buildType")
++    r_engine = offlineBuilder.build(offlineModel.graph,
++                                    offlineModel.params,
++                                    out_path=outputPath)
++
++
++def pmodel_inletv3(modelType="Pytorch",
++                   modelFile="",
++                   buildType="apu",
++                   inputPart=None,
++                   outputPart=None,
++                   outputPath=''):
++    '''
++    modelType: 'Tensorflow','Keras','Keras_tf','MXNet','Caffe','Pytorch','ONNX'
++    modelFile: 离线模型的相关路径
++    buildType:
++        cpus: cpu模拟推理 (target='cpu', cpu_arch="x86", cc="g++")
++        apus: apu模拟推理 (target='apu', cpu_arch="x86", cc="g++")
++        apu:  apu板卡推理 (target='apu')
++    '''
++    print("[pmodel_inlet] lyngor version:{}, lyngor path:{}".format(
++        lyngor.version, lyngor))
++    if not os.path.exists(modelFile):
++        print("model file not exists.")
++
++    offlineModel = lyngor.DLModel()
++    offlineModel.load(modelFile,
++                      model_type=modelType,
++                      inputs_dict=inputPart,
++                      outputs=outputPart)
++
++    if buildType == "cpus":
++        offlineBuilder = lyngor.Builder(target='cpu',
++                                        cpu_arch="x86",
++                                        cc="g++",
++                                        is_map=True)
++    elif buildType == "apus":
++        offlineBuilder = lyngor.Builder(target='apu',
++                                        cpu_arch="x86",
++                                        cc="g++",
++                                        is_map=True)
++    elif buildType == "apu":
++        offlineBuilder = lyngor.Builder(target='apu', is_map=True)
++    else:
++        print("cannot support the buildType")
++    r_engine = offlineBuilder.build(offlineModel.graph,
++                                    offlineModel.params,
++                                    out_path=outputPath)
++
++
++# brief: 仅用于北京瑞莱的模型，主要是输入输出数据类型的调整
++def pmodel_inletv4(modelType="Pytorch",
++                   modelFile="",
++                   buildType="apu",
++                   inputPart=None,
++                   outputPart=None,
++                   outputPath=''):
++    '''
++    modelType: 'Tensorflow','Keras','Keras_tf','MXNet','Caffe','Pytorch','ONNX'
++    modelFile: 离线模型的相关路径
++    buildType:
++        cpus: cpu模拟推理 (target='cpu', cpu_arch="x86", cc="g++")
++        apus: apu模拟推理 (target='apu', cpu_arch="x86", cc="g++")
++        apu:  apu板卡推理 (target='apu')
++    '''
++    print("[pmodel_inlet] lyngor version:{}, lyngor path:{}".format(
++        lyngor.version, lyngor))
++    if not os.path.exists(modelFile):
++        print("model file not exists.")
++
++    offlineModel = lyngor.DLModel()
++    offlineModel.load(modelFile,
++                      model_type=modelType,
++                      inputs_dict=inputPart,
++                      in_type="uint8",
++                      out_type="float32",
++                      outputs=outputPart)
++
++    if buildType == "cpus":
++        offlineBuilder = lyngor.Builder(target='cpu',
++                                        cpu_arch="x86",
++                                        cc="g++",
++                                        is_map=True)
++    elif buildType == "apus":
++        offlineBuilder = lyngor.Builder(target='apu',
++                                        cpu_arch="x86",
++                                        cc="g++",
++                                        is_map=True)
++    elif buildType == "apu":
++        offlineBuilder = lyngor.Builder(target='apu', is_map=True)
++    else:
++        print("cannot support the buildType")
++    r_engine = offlineBuilder.build(offlineModel.graph,
++                                    offlineModel.params,
++                                    out_path=outputPath)
++
++
++# brief: 仅用于大连致胜的模型，主要是输入输出数据类型的调整
++def pmodel_inletv5(modelType="Pytorch",
++                   modelFile="",
++                   buildType="apu",
++                   inputPart=None,
++                   outputPart=None,
++                   outputPath=''):
++    '''
++    modelType: 'Tensorflow','Keras','Keras_tf','MXNet','Caffe','Pytorch','ONNX'
++    modelFile: 离线模型的相关路径
++    buildType:
++        cpus: cpu模拟推理 (target='cpu', cpu_arch="x86", cc="g++")
++        apus: apu模拟推理 (target='apu', cpu_arch="x86", cc="g++")
++        apu:  apu板卡推理 (target='apu')
++    '''
++    print("[pmodel_inlet] lyngor version:{}, lyngor path:{}".format(
++        lyngor.version, lyngor))
++    if not os.path.exists(modelFile):
++        print("model file not exists.")
++
++    offlineModel = lyngor.DLModel()
++    offlineModel.load(modelFile,
++                      model_type=modelType,
++                      inputs_dict=inputPart,
++                      in_type="float32",
++                      out_type="float32",
++                      outputs=outputPart)
++
++    if buildType == "cpus":
++        offlineBuilder = lyngor.Builder(target='cpu',
++                                        cpu_arch="x86",
++                                        cc="g++",
++                                        is_map=True)
++    elif buildType == "apus":
++        offlineBuilder = lyngor.Builder(target='apu',
++                                        cpu_arch="x86",
++                                        cc="g++",
++                                        is_map=True)
++    elif buildType == "apu":
++        offlineBuilder = lyngor.Builder(target='apu', is_map=True)
++    else:
++        print("cannot support the buildType")
++    r_engine = offlineBuilder.build(offlineModel.graph,
++                                    offlineModel.params,
++                                    out_path=outputPath)
++
++
++'''
++使用方法：
++modelName = "yolov3.pb"
++modelFile = '../3rdtools/tensorflow-yolov3-master/my_conf/{}'.format(modelName)
++pmodel_inlet(modelType="Tensorflow", modelFile=modelFile)
++'''
+diff --git a/pylib/pyutil/Utils.py b/pylib/pyutil/Utils.py
+new file mode 100755
+index 0000000..078c4c8
+--- /dev/null
++++ b/pylib/pyutil/Utils.py
+@@ -0,0 +1,65 @@
++import os
++import cv2
++import numpy as np
++from matplotlib import pyplot as plt
++import pickle
++
++
++def dumpPickle(data, fileName):
++    ''' 序列化对象到文件
++    '''
++    tempFile = "./{}.bin".format(fileName)
++    with open(tempFile, 'wb') as fin:
++        pickle.dump(data, fin)
++    pass
++
++
++def dumpPickleAbs(data, absFile=None):
++    ''' 序列化对象到文件
++    '''
++    with open(absFile, 'wb') as fin:
++        pickle.dump(data, fin)
++    pass
++
++
++def loadPickle(binFile):
++    ''' 加载序列化文件
++    '''
++    if not os.path.exists(binFile):
++        print("warn: {} not exists".format(binFile))
++        return None
++    with open(binFile, "rb") as fin:
++        ret = pickle.load(fin)
++    return ret
++
++
++def showImage(image):
++    print("image shape: {}".format(image.shape))
++    plt.imshow(image)
++    plt.show()
++
++
++def handleImage(imageName, newSize=(640, 640), showImage=False, forTf=False):
++    image = cv2.imread(imageName, cv2.IMREAD_UNCHANGED)
++    if showImage:
++        showImage(image)
++
++    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
++    if showImage:
++        showImage(image)
++
++    image = cv2.resize(image, newSize, interpolation=cv2.INTER_LINEAR)
++    if showImage:
++        showImage(image)
++
++    if not forTf:
++        image = image.transpose(2, 0, 1)  # 3 w h
++    image = image[np.newaxis, :]  # 1 3 w h
++    image = image.astype(np.float32)
++    print("image shape: {}".format(image.shape))
++
++    tempFile = "./dump_image.bin"
++    with open(tempFile, 'wb') as fin:
++        # fin.write(image.tobytes())
++        pickle.dump(image, fin)
++    return image
+diff --git a/train.py b/train.py
+index 4e7d6e0..6b4899f 100644
+--- a/train.py
++++ b/train.py
+@@ -14,16 +14,40 @@ import math
+ from models.retinaface import RetinaFace
+
+ parser = argparse.ArgumentParser(description='Retinaface Training')
+-parser.add_argument('--training_dataset', default='./data/widerface/train/label.txt', help='Training dataset directory')
+-parser.add_argument('--network', default='mobile0.25', help='Backbone network mobile0.25 or resnet50')
+-parser.add_argument('--num_workers', default=4, type=int, help='Number of workers used in dataloading')
+-parser.add_argument('--lr', '--learning-rate', default=1e-3, type=float, help='initial learning rate')
++parser.add_argument('--training_dataset',
++                    default='./data/widerface/train/label.txt',
++                    help='Training dataset directory')
++parser.add_argument('--network',
++                    default='mobile0.25',
++                    help='Backbone network mobile0.25 or resnet50')
++parser.add_argument('--num_workers',
++                    default=4,
++                    type=int,
++                    help='Number of workers used in dataloading')
++parser.add_argument('--lr',
++                    '--learning-rate',
++                    default=1e-3,
++                    type=float,
++                    help='initial learning rate')
+ parser.add_argument('--momentum', default=0.9, type=float, help='momentum')
+-parser.add_argument('--resume_net', default=None, help='resume net for retraining')
+-parser.add_argument('--resume_epoch', default=0, type=int, help='resume iter for retraining')
+-parser.add_argument('--weight_decay', default=5e-4, type=float, help='Weight decay for SGD')
+-parser.add_argument('--gamma', default=0.1, type=float, help='Gamma update for SGD')
+-parser.add_argument('--save_folder', default='./weights/', help='Location to save checkpoint models')
++parser.add_argument('--resume_net',
++                    default=None,
++                    help='resume net for retraining')
++parser.add_argument('--resume_epoch',
++                    default=0,
++                    type=int,
++                    help='resume iter for retraining')
++parser.add_argument('--weight_decay',
++                    default=5e-4,
++                    type=float,
++                    help='Weight decay for SGD')
++parser.add_argument('--gamma',
++                    default=0.1,
++                    type=float,
++                    help='Gamma update for SGD')
++parser.add_argument('--save_folder',
++                    default='./weights/',
++                    help='Location to save checkpoint models')
+
+ args = parser.parse_args()
+
+@@ -35,7 +59,7 @@ if args.network == "mobile0.25":
+ elif args.network == "resnet50":
+     cfg = cfg_re50
+
+-rgb_mean = (104, 117, 123) # bgr order
++rgb_mean = (104, 117, 123)  # bgr order
+ num_classes = 2
+ img_dim = cfg['image_size']
+ num_gpu = cfg['ngpu']
+@@ -64,7 +88,7 @@ if args.resume_net is not None:
+     for k, v in state_dict.items():
+         head = k[:7]
+         if head == 'module.':
+-            name = k[7:] # remove `module.`
++            name = k[7:]  # remove `module.`
+         else:
+             name = k
+         new_state_dict[name] = v
+@@ -77,8 +101,10 @@ else:
+
+ cudnn.benchmark = True
+
+-
+-optimizer = optim.SGD(net.parameters(), lr=initial_lr, momentum=momentum, weight_decay=weight_decay)
++optimizer = optim.SGD(net.parameters(),
++                      lr=initial_lr,
++                      momentum=momentum,
++                      weight_decay=weight_decay)
+ criterion = MultiBoxLoss(num_classes, 0.35, True, 0, True, 7, 0.35, False)
+
+ priorbox = PriorBox(cfg, image_size=(img_dim, img_dim))
+@@ -86,12 +112,13 @@ with torch.no_grad():
+     priors = priorbox.forward()
+     priors = priors.cuda()
+
++
+ def train():
+     net.train()
+     epoch = 0 + args.resume_epoch
+     print('Loading Dataset...')
+
+-    dataset = WiderFaceDetection( training_dataset,preproc(img_dim, rgb_mean))
++    dataset = WiderFaceDetection(training_dataset, preproc(img_dim, rgb_mean))
+
+     epoch_size = math.ceil(len(dataset) / batch_size)
+     max_iter = max_epoch * epoch_size
+@@ -107,15 +134,24 @@ def train():
+     for iteration in range(start_iter, max_iter):
+         if iteration % epoch_size == 0:
+             # create batch iterator
+-            batch_iterator = iter(data.DataLoader(dataset, batch_size, shuffle=True, num_workers=num_workers, collate_fn=detection_collate))
+-            if (epoch % 10 == 0 and epoch > 0) or (epoch % 5 == 0 and epoch > cfg['decay1']):
+-                torch.save(net.state_dict(), save_folder + cfg['name']+ '_epoch_' + str(epoch) + '.pth')
++            batch_iterator = iter(
++                data.DataLoader(dataset,
++                                batch_size,
++                                shuffle=True,
++                                num_workers=num_workers,
++                                collate_fn=detection_collate))
++            if (epoch % 10 == 0 and epoch > 0) or (epoch % 5 == 0
++                                                   and epoch > cfg['decay1']):
++                torch.save(
++                    net.state_dict(), save_folder + cfg['name'] + '_epoch_' +
++                    str(epoch) + '.pth')
+             epoch += 1
+
+         load_t0 = time.time()
+         if iteration in stepvalues:
+             step_index += 1
+-        lr = adjust_learning_rate(optimizer, gamma, epoch, step_index, iteration, epoch_size)
++        lr = adjust_learning_rate(optimizer, gamma, epoch, step_index,
++                                  iteration, epoch_size)
+
+         # load train data
+         images, targets = next(batch_iterator)
+@@ -134,27 +170,33 @@ def train():
+         load_t1 = time.time()
+         batch_time = load_t1 - load_t0
+         eta = int(batch_time * (max_iter - iteration))
+-        print('Epoch:{}/{} || Epochiter: {}/{} || Iter: {}/{} || Loc: {:.4f} Cla: {:.4f} Landm: {:.4f} || LR: {:.8f} || Batchtime: {:.4f} s || ETA: {}'
+-              .format(epoch, max_epoch, (iteration % epoch_size) + 1,
+-              epoch_size, iteration + 1, max_iter, loss_l.item(), loss_c.item(), loss_landm.item(), lr, batch_time, str(datetime.timedelta(seconds=eta))))
++        print(
++            'Epoch:{}/{} || Epochiter: {}/{} || Iter: {}/{} || Loc: {:.4f} Cla: {:.4f} Landm: {:.4f} || LR: {:.8f} || Batchtime: {:.4f} s || ETA: {}'
++            .format(epoch, max_epoch, (iteration % epoch_size) + 1, epoch_size,
++                    iteration + 1, max_iter, loss_l.item(), loss_c.item(),
++                    loss_landm.item(), lr, batch_time,
++                    str(datetime.timedelta(seconds=eta))))
+
+     torch.save(net.state_dict(), save_folder + cfg['name'] + '_Final.pth')
+     # torch.save(net.state_dict(), save_folder + 'Final_Retinaface.pth')
+
+
+-def adjust_learning_rate(optimizer, gamma, epoch, step_index, iteration, epoch_size):
++def adjust_learning_rate(optimizer, gamma, epoch, step_index, iteration,
++                         epoch_size):
+     """Sets the learning rate
+     # Adapted from PyTorch Imagenet example:
+     # https://github.com/pytorch/examples/blob/master/imagenet/main.py
+     """
+     warmup_epoch = -1
+     if epoch <= warmup_epoch:
+-        lr = 1e-6 + (initial_lr-1e-6) * iteration / (epoch_size * warmup_epoch)
++        lr = 1e-6 + (initial_lr - 1e-6) * iteration / (epoch_size *
++                                                       warmup_epoch)
+     else:
+-        lr = initial_lr * (gamma ** (step_index))
++        lr = initial_lr * (gamma**(step_index))
+     for param_group in optimizer.param_groups:
+         param_group['lr'] = lr
+     return lr
+
++
+ if __name__ == '__main__':
+     train()
+--
+2.7.4
