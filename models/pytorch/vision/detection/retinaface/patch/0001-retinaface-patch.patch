@@ -1,12 +1,12 @@
-From db66b2c7b341f0b238cfa4f97263e2b0b7af8bb2 Mon Sep 17 00:00:00 2001
+From 6e527c33079b5faf7e74b6b036170d841063fd27 Mon Sep 17 00:00:00 2001
 From: "shuangquan.he" <shuangquan.he@lynxi.com>
-Date: Fri, 24 Jun 2022 14:03:46 +0800
+Date: Fri, 24 Jun 2022 15:24:10 +0800
 Subject: [PATCH] retinaface patch
 
 ---
- detect_lynxi.py  | 188 +++++++++++++++++++++++++++++++++++++++++++++++
- detect_target.py | 217 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
- 2 files changed, 405 insertions(+)
+ detect_lynxi.py  | 188 +++++++++++++++++++++++++++++++++++++++++++
+ detect_target.py | 237 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 425 insertions(+)
  create mode 100755 detect_lynxi.py
  create mode 100755 detect_target.py
 
@@ -207,10 +207,10 @@ index 0000000..3414e62
 \ No newline at end of file
 diff --git a/detect_target.py b/detect_target.py
 new file mode 100755
-index 0000000..3e3474c
+index 0000000..cb41a88
 --- /dev/null
 +++ b/detect_target.py
-@@ -0,0 +1,217 @@
+@@ -0,0 +1,237 @@
 +from __future__ import print_function
 +import os
 +import argparse
@@ -266,6 +266,10 @@ index 0000000..3e3474c
 +                    default='./curve/result.jpg',
 +                    type=str,
 +                    help='infer result for input')
++parser.add_argument('--platform',
++                    default='opensource',
++                    type=str,
++                    help='which platform the model run on?')
 +args = parser.parse_args()
 +
 +
@@ -315,6 +319,15 @@ index 0000000..3e3474c
 +        pickle.dump(data, fin)
 +
 +
++def loadPickle(binFile):
++    if not os.path.exists(binFile):
++        print("warn: {} not exists".format(binFile))
++        return None
++    with open(binFile, "rb") as fin:
++        ret = pickle.load(fin)
++    return ret
++
++
 +if __name__ == '__main__':
 +    torch.set_grad_enabled(False)
 +    cfg = None
@@ -354,12 +367,19 @@ index 0000000..3e3474c
 +        scale = scale.to(device)
 +
 +        tic = time.time()
-+        dumpPickleAbs(img, "{}/golden/input.bin".format(STOP))
-+        loc, conf, landms = net(img)  # forward pass
++        if (args.platform == "lynxi"):
++            ret = loadPickle("{}/golden/output_myself.bin".format(STOP))
++            loc = torch.from_numpy(ret[0])
++            conf = torch.from_numpy(ret[1])
++            landms = torch.from_numpy(ret[2])
++        else:
++            dumpPickleAbs(img, "{}/golden/input.bin".format(STOP))
++            loc, conf, landms = net(img)  # forward pass
++            dumpPickleAbs(
++                [loc.numpy(), conf.numpy(),
++                 landms.numpy()], "{}/golden/output_target.bin".format(STOP))
++            pass
 +        print('net forward time: {:.4f}'.format(time.time() - tic))
-+        dumpPickleAbs([loc.numpy(), conf.numpy(),
-+                       landms.numpy()],
-+                      "{}/golden/output_target.bin".format(STOP))
 +
 +        priorbox = PriorBox(cfg, image_size=(im_height, im_width))
 +        priors = priorbox.forward()

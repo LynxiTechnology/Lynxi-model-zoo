@@ -13,6 +13,7 @@
    1_prepare.sh
    2_convert.sh
    3_test.sh
+   4_detect.sh
 ```
 
 3. 结果概要
@@ -22,4 +23,5 @@ golden/
 ├── input.bin              // binary image by pickle
 ├── output_myself.bin      // output from lynxi model
 ├── output_target.bin      // output from original model
+├── output_myself.jpg      // output img from lynxi model
 └── output_target.jpg      // output img from original model
