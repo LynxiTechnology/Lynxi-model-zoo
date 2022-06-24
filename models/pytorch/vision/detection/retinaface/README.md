@@ -16,10 +16,10 @@
 ```
 
 3. 结果概要
-在目录./Pytorch_Retinaface/curve中生成所有必要信息，部分必要在终端显示
-├── input.bin
-├── model_myself            // lynxi模型
-├── output_myself.bin       // lynxi模型推理结果
-├── output_target.bin       // 开源模型推理结果
-├── test.jpg                // 推理结果
-├── target_net.pth          // 开源代码生成的pytorch模型
+在目录golden/ 中生成所有必要信息，部分必要在终端显示
+golden/
+├── img_640_640.jpg        // input image
+├── input.bin              // binary image by pickle
+├── output_myself.bin      // output from lynxi model
+├── output_target.bin      // output from original model
+└── output_target.jpg      // output img from original model
