@@ -17,6 +17,7 @@
 ```
 
 3. 结果概要
+```
 在目录golden/ 中生成所有必要信息，部分必要在终端显示
 golden/
 ├── img_640_640.jpg        // input image
@@ -25,3 +26,4 @@ golden/
 ├── output_target.bin      // output from original model
 ├── output_myself.jpg      // output img from lynxi model
 └── output_target.jpg      // output img from original model
+```
