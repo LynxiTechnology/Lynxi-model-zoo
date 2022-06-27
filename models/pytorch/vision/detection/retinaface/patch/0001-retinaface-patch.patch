@@ -1,0 +1,453 @@
+From 6e527c33079b5faf7e74b6b036170d841063fd27 Mon Sep 17 00:00:00 2001
+From: "shuangquan.he" <shuangquan.he@lynxi.com>
+Date: Fri, 24 Jun 2022 15:24:10 +0800
+Subject: [PATCH] retinaface patch
+
+---
+ detect_lynxi.py  | 188 +++++++++++++++++++++++++++++++++++++++++++
+ detect_target.py | 237 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 425 insertions(+)
+ create mode 100755 detect_lynxi.py
+ create mode 100755 detect_target.py
+
+diff --git a/detect_lynxi.py b/detect_lynxi.py
+new file mode 100755
+index 0000000..3414e62
+--- /dev/null
++++ b/detect_lynxi.py
+@@ -0,0 +1,188 @@
++from genericpath import exists
++import os
++import sys
++import pickle
++import argparse
++import lyngor
++import numpy as np
++import torch
++
++TOP = os.environ['TOP']
++STOP = os.environ['STOP']
++
++parser = argparse.ArgumentParser()
++parser.add_argument('-m', '--mode', default='null', type=str)
++parser.add_argument('-p', '--path', default='null', type=str)
++parser.add_argument('-i', '--imgdump', default='null', type=str)
++
++
++def pmodel_inletv3(modelType="Pytorch",
++                   modelFile="",
++                   buildType="apu",
++                   inputPart=None,
++                   outputPart=None,
++                   outputPath=''):
++    '''
++    modelType: 'Tensorflow','Keras','Keras_tf','MXNet','Caffe','Pytorch','ONNX'
++    modelFile: 离线模型的相关路径
++    buildType:
++        cpus: cpu模拟推理 (target='cpu', cpu_arch="x86", cc="g++")
++        apus: apu模拟推理 (target='apu', cpu_arch="x86", cc="g++")
++        apu:  apu板卡推理 (target='apu')
++    '''
++    print("[pmodel_inlet] lyngor version:{}, lyngor path:{}".format(
++        lyngor.version, lyngor))
++    if not os.path.exists(modelFile):
++        print("model file not exists.")
++
++    offlineModel = lyngor.DLModel()
++    offlineModel.load(modelFile,
++                      model_type=modelType,
++                      inputs_dict=inputPart,
++                      outputs=outputPart)
++
++    if buildType == "cpus":
++        offlineBuilder = lyngor.Builder(target='cpu',
++                                        cpu_arch="x86",
++                                        cc="g++",
++                                        is_map=True)
++    elif buildType == "apus":
++        offlineBuilder = lyngor.Builder(target='apu',
++                                        cpu_arch="x86",
++                                        cc="g++",
++                                        is_map=True)
++    elif buildType == "apu":
++        offlineBuilder = lyngor.Builder(target='apu', is_map=True)
++    else:
++        print("cannot support the buildType")
++    r_engine = offlineBuilder.build(offlineModel.graph,
++                                    offlineModel.params,
++                                    out_path=outputPath)
++
++
++def funcModel(targetFile: str):
++    if not os.path.exists(targetFile):
++        sys.exit(1)
++
++    myselfModelFile = "{}/model_myself".format(STOP)
++    pmodel_inletv3(modelType="Pytorch",
++                   modelFile=targetFile,
++                   buildType='apu',
++                   inputPart={'input0': (1, 3, 640, 640)},
++                   outputPart=None,
++                   outputPath=myselfModelFile)
++    pass
++
++
++def loadPickle(binFile):
++    if not os.path.exists(binFile):
++        print("warn: {} not exists".format(binFile))
++        return None
++    with open(binFile, "rb") as fin:
++        ret = pickle.load(fin)
++    return ret
++
++
++def modelByRuntime(lynModelPath=None, input=None):
++    input = loadPickle(input)
++    if isinstance(input, torch.Tensor):
++        input = input.numpy()
++    input = np.ascontiguousarray(input)
++
++    modelLyn = lyngor.loader.load(path=lynModelPath, device=0, PDT=False)
++    modelLyn.run(data_format='numpy', **{"input0": input})
++    ret = modelLyn.get_output(data_format='numpy')
++    print("len ret: {}".format(len(ret)))
++    for i in range(len(ret)):
++        print("{}: {}".format(i, ret[i].shape))
++
++    return ret
++
++
++def measure_mse(list_target, list_compare, identifier):
++    '''
++    均方误差(MSE)是各数据偏离真实值差值的平方和的平均数
++    list_target  真实模型的推理结果
++    list_compare 编译模型的推理结果
++    '''
++    if not (isinstance(list_target, np.ndarray)
++            and isinstance(list_compare, np.ndarray)):
++        return None
++    ret = np.sum((np.float32(list_compare) - np.float32(list_target))**
++                 2) / len(list_target)
++    print("[均方误差MSE] 分段_{}: {}".format(identifier, ret))
++    return ret
++
++
++def measure_error_rate(list_target, list_compare, identifier):
++    '''
++    误差率：预测值相对真实值的误差值
++    list_target  真实模型的推理结果
++    list_compare 编译模型的推理结果
++    '''
++    ret = np.sqrt(np.sum((np.float32(list_compare) - np.float32(list_target))**2)) / \
++        np.sqrt(np.sum(np.float32(list_target)**2))
++    print("[误差率] 分段_{}: {}".format(identifier, ret))
++    return ret
++
++
++def measure_inlet(data_target, data_lynpy):
++    '''
++    data_target: [np0, np1, ...]
++    data_lynpy: [np0, np1, ...]
++    '''
++    # if not (data_target and data_lynpy):
++    #     print("warn: maybe none for input")
++    #     return None
++
++    # 多输出的分段评估
++    for index in range(len(data_target)):
++        data_flat_caffe = data_target[index].flatten()
++        data_flat_lynpy = data_lynpy[index].flatten()
++        measure_mse(data_flat_caffe, data_flat_lynpy, "{}".format(index))
++        measure_error_rate(data_flat_caffe, data_flat_lynpy,
++                           "{}".format(index))
++
++    # 多输出的整体评估
++    '''
++    data_caffe[0].numpy().flatten() pytorch -> numpy
++    tempTarget = np.concatenate(
++        (data_target[0].flatten(), data_target[1].flatten(),
++         data_target[2].flatten()),
++        axis=0)
++    tempMyself = np.concatenate(
++        (data_lynpy[0].flatten(), data_lynpy[1].flatten(),
++         data_lynpy[2].flatten()),
++        axis=0)
++    '''
++
++    tempTarget = np.concatenate([it.flatten() for it in data_target], axis=0)
++    tempMyself = np.concatenate([it.flatten() for it in data_lynpy], axis=0)
++    measure_mse(tempTarget, tempMyself, "整体")
++    measure_error_rate(tempTarget, tempMyself, "整体")
++
++
++def funcRun(lynxiFile: str, imgFile):
++    if not (os.path.exists(lynxiFile) or os.path.exists(imgFile)):
++        sys.exit(1)
++
++    ret = modelByRuntime("{}/Net_0".format(lynxiFile), imgFile)
++    tempFile = "{}/golden/output_myself.bin".format(STOP)
++    with open(tempFile, 'wb') as fin:
++        pickle.dump(ret, fin)
++    pass
++
++
++if __name__ == '__main__':
++    args = parser.parse_args()
++
++    if args.mode == "build":
++        funcModel(args.path)
++    elif args.mode == "run":
++        funcRun(args.path, args.imgdump)
++
++        measure_inlet(loadPickle("{}/golden/output_target.bin".format(STOP)),
++                      loadPickle("{}/golden/output_myself.bin".format(STOP)))
++    else:
++        print("error, cannot support the option")
++    pass
+\ No newline at end of file
+diff --git a/detect_target.py b/detect_target.py
+new file mode 100755
+index 0000000..cb41a88
+--- /dev/null
++++ b/detect_target.py
+@@ -0,0 +1,237 @@
++from __future__ import print_function
++import os
++import argparse
++import torch
++import torch.backends.cudnn as cudnn
++import numpy as np
++from data import cfg_mnet, cfg_re50
++from layers.functions.prior_box import PriorBox
++from utils.nms.py_cpu_nms import py_cpu_nms
++import cv2
++from models.retinaface import RetinaFace
++from utils.box_utils import decode, decode_landm
++import time
++import pickle
++
++TOP = os.environ['TOP']
++STOP = os.environ['STOP']
++
++parser = argparse.ArgumentParser(description='Retinaface')
++
++parser.add_argument('-m',
++                    '--trained_model',
++                    default='./weights/Resnet50_Final.pth',
++                    type=str,
++                    help='Trained state_dict file path to open')
++parser.add_argument('--network',
++                    default='resnet50',
++                    help='Backbone network mobile0.25 or resnet50')
++parser.add_argument('--cpu',
++                    action="store_true",
++                    default=False,
++                    help='Use cpu inference')
++parser.add_argument('--confidence_threshold',
++                    default=0.02,
++                    type=float,
++                    help='confidence_threshold')
++parser.add_argument('--top_k', default=5000, type=int, help='top_k')
++parser.add_argument('--nms_threshold',
++                    default=0.4,
++                    type=float,
++                    help='nms_threshold')
++parser.add_argument('--keep_top_k', default=750, type=int, help='keep_top_k')
++parser.add_argument('-s',
++                    '--save_image',
++                    action="store_true",
++                    default=True,
++                    help='show detection results')
++parser.add_argument('--vis_thres',
++                    default=0.6,
++                    type=float,
++                    help='visualization_threshold')
++parser.add_argument('--output_result',
++                    default='./curve/result.jpg',
++                    type=str,
++                    help='infer result for input')
++parser.add_argument('--platform',
++                    default='opensource',
++                    type=str,
++                    help='which platform the model run on?')
++args = parser.parse_args()
++
++
++def check_keys(model, pretrained_state_dict):
++    ckpt_keys = set(pretrained_state_dict.keys())
++    model_keys = set(model.state_dict().keys())
++    used_pretrained_keys = model_keys & ckpt_keys
++    unused_pretrained_keys = ckpt_keys - model_keys
++    missing_keys = model_keys - ckpt_keys
++    print('Missing keys:{}'.format(len(missing_keys)))
++    print('Unused checkpoint keys:{}'.format(len(unused_pretrained_keys)))
++    print('Used keys:{}'.format(len(used_pretrained_keys)))
++    assert len(
++        used_pretrained_keys) > 0, 'load NONE from pretrained checkpoint'
++    return True
++
++
++def remove_prefix(state_dict, prefix):
++    ''' Old style model is stored with all names of parameters sharing common prefix 'module.' '''
++    print('remove prefix \'{}\''.format(prefix))
++    f = lambda x: x.split(prefix, 1)[-1] if x.startswith(prefix) else x
++    return {f(key): value for key, value in state_dict.items()}
++
++
++def load_model(model, pretrained_path, load_to_cpu):
++    print('Loading pretrained model from {}'.format(pretrained_path))
++    if load_to_cpu:
++        pretrained_dict = torch.load(pretrained_path,
++                                     map_location=lambda storage, loc: storage)
++    else:
++        device = torch.cuda.current_device()
++        pretrained_dict = torch.load(
++            pretrained_path,
++            map_location=lambda storage, loc: storage.cuda(device))
++    if "state_dict" in pretrained_dict.keys():
++        pretrained_dict = remove_prefix(pretrained_dict['state_dict'],
++                                        'module.')
++    else:
++        pretrained_dict = remove_prefix(pretrained_dict, 'module.')
++    check_keys(model, pretrained_dict)
++    model.load_state_dict(pretrained_dict, strict=False)
++    return model
++
++
++def dumpPickleAbs(data, absFile=None):
++    with open(absFile, 'wb') as fin:
++        pickle.dump(data, fin)
++
++
++def loadPickle(binFile):
++    if not os.path.exists(binFile):
++        print("warn: {} not exists".format(binFile))
++        return None
++    with open(binFile, "rb") as fin:
++        ret = pickle.load(fin)
++    return ret
++
++
++if __name__ == '__main__':
++    torch.set_grad_enabled(False)
++    cfg = None
++    if args.network == "mobile0.25":
++        cfg = cfg_mnet
++    elif args.network == "resnet50":
++        cfg = cfg_re50
++    # net and model
++    net = RetinaFace(cfg=cfg, phase='test')
++    net = load_model(net, args.trained_model, args.cpu)
++    net.eval()
++
++    targetModelFile = "{}/curve/target_net.pth".format(TOP)
++    torch.save(net, targetModelFile)
++    print('Finished loading model!')
++    print(net)
++    cudnn.benchmark = True
++    device = torch.device("cpu" if args.cpu else "cuda")
++    net = net.to(device)
++
++    resize = 1
++
++    # testing begin
++    for i in range(1):
++        image_path = "{}/curve/test.jpg".format(TOP)
++        img_raw = cv2.imread(image_path, cv2.IMREAD_COLOR)
++
++        img = np.float32(img_raw)
++
++        im_height, im_width, _ = img.shape
++        scale = torch.Tensor(
++            [img.shape[1], img.shape[0], img.shape[1], img.shape[0]])
++        img -= (104, 117, 123)
++        img = img.transpose(2, 0, 1)
++        img = torch.from_numpy(img).unsqueeze(0)
++        img = img.to(device)
++        scale = scale.to(device)
++
++        tic = time.time()
++        if (args.platform == "lynxi"):
++            ret = loadPickle("{}/golden/output_myself.bin".format(STOP))
++            loc = torch.from_numpy(ret[0])
++            conf = torch.from_numpy(ret[1])
++            landms = torch.from_numpy(ret[2])
++        else:
++            dumpPickleAbs(img, "{}/golden/input.bin".format(STOP))
++            loc, conf, landms = net(img)  # forward pass
++            dumpPickleAbs(
++                [loc.numpy(), conf.numpy(),
++                 landms.numpy()], "{}/golden/output_target.bin".format(STOP))
++            pass
++        print('net forward time: {:.4f}'.format(time.time() - tic))
++
++        priorbox = PriorBox(cfg, image_size=(im_height, im_width))
++        priors = priorbox.forward()
++        priors = priors.to(device)
++        prior_data = priors.data
++        boxes = decode(loc.data.squeeze(0), prior_data, cfg['variance'])
++        boxes = boxes * scale / resize
++        boxes = boxes.cpu().numpy()
++        scores = conf.squeeze(0).data.cpu().numpy()[:, 1]
++        landms = decode_landm(landms.data.squeeze(0), prior_data,
++                              cfg['variance'])
++        scale1 = torch.Tensor([
++            img.shape[3], img.shape[2], img.shape[3], img.shape[2],
++            img.shape[3], img.shape[2], img.shape[3], img.shape[2],
++            img.shape[3], img.shape[2]
++        ])
++        scale1 = scale1.to(device)
++        landms = landms * scale1 / resize
++        landms = landms.cpu().numpy()
++
++        # ignore low scores
++        inds = np.where(scores > args.confidence_threshold)[0]
++        boxes = boxes[inds]
++        landms = landms[inds]
++        scores = scores[inds]
++
++        # keep top-K before NMS
++        order = scores.argsort()[::-1][:args.top_k]
++        boxes = boxes[order]
++        landms = landms[order]
++        scores = scores[order]
++
++        # do NMS
++        dets = np.hstack((boxes, scores[:, np.newaxis])).astype(np.float32,
++                                                                copy=False)
++        keep = py_cpu_nms(dets, args.nms_threshold)
++        # keep = nms(dets, args.nms_threshold,force_cpu=args.cpu)
++        dets = dets[keep, :]
++        landms = landms[keep]
++
++        # keep top-K faster NMS
++        dets = dets[:args.keep_top_k, :]
++        landms = landms[:args.keep_top_k, :]
++
++        dets = np.concatenate((dets, landms), axis=1)
++
++        # show image
++        if args.save_image:
++            for b in dets:
++                if b[4] < args.vis_thres:
++                    continue
++                text = "{:.4f}".format(b[4])
++                b = list(map(int, b))
++                cv2.rectangle(img_raw, (b[0], b[1]), (b[2], b[3]), (0, 0, 255),
++                              2)
++                cx = b[0]
++                cy = b[1] + 12
++                cv2.putText(img_raw, text, (cx, cy), cv2.FONT_HERSHEY_DUPLEX,
++                            0.5, (255, 255, 255))
++
++                # landms
++                cv2.circle(img_raw, (b[5], b[6]), 1, (0, 0, 255), 4)
++                cv2.circle(img_raw, (b[7], b[8]), 1, (0, 255, 255), 4)
++                cv2.circle(img_raw, (b[9], b[10]), 1, (255, 0, 255), 4)
++                cv2.circle(img_raw, (b[11], b[12]), 1, (0, 255, 0), 4)
++                cv2.circle(img_raw, (b[13], b[14]), 1, (255, 0, 0), 4)
++            # save image
++            cv2.imwrite(args.output_result, img_raw)
+-- 
+2.7.4
+
