@@ -1,0 +1,481 @@
+From e6db6b158353d6a1671e22d6273b97b529634ff5 Mon Sep 17 00:00:00 2001
+From: sparkssjj <doc_killer@163.com>
+Date: Fri, 29 Jul 2022 15:38:49 +0800
+Subject: [PATCH] add lyncompile and lyninference
+
+---
+ deep_sort/deep/feature_extractor.py |   2 +-
+ detector/YOLOv3/darknet.py          |  53 ++++++----
+ detector/YOLOv3/detector.py         |  11 +-
+ lyncompile.py                       |  28 +++++
+ lyninference.py                     | 205 ++++++++++++++++++++++++++++++++++++
+ requirements.txt                    |   6 +-
+ 6 files changed, 272 insertions(+), 33 deletions(-)
+ create mode 100755 lyncompile.py
+ create mode 100755 lyninference.py
+
+diff --git a/deep_sort/deep/feature_extractor.py b/deep_sort/deep/feature_extractor.py
+index a35283e..def8609 100644
+--- a/deep_sort/deep/feature_extractor.py
++++ b/deep_sort/deep/feature_extractor.py
+@@ -17,6 +17,7 @@ class Extractor(object):
+         self.net.load_state_dict(state_dict)
+         logger = logging.getLogger("root.tracker")
+         logger.info("Loading weights from {}... Done!".format(model_path))
++        torch.save(self.net, "./track.pth")
+         self.net.to(self.device)
+         self.size = (64, 128)
+         self.norm = transforms.Compose([
+@@ -69,7 +70,6 @@ class FastReIDExtractor(object):
+             transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+         ])
+ 
+-    
+     def _preprocess(self, im_crops):
+         def _resize(im, size):
+             return cv2.resize(im.astype(np.float32)/255., size)
+diff --git a/detector/YOLOv3/darknet.py b/detector/YOLOv3/darknet.py
+index da6d3c0..38f1152 100644
+--- a/detector/YOLOv3/darknet.py
++++ b/detector/YOLOv3/darknet.py
+@@ -16,17 +16,10 @@ class MaxPoolStride1(nn.Module):
+ class Upsample(nn.Module):
+     def __init__(self, stride=2):
+         super(Upsample, self).__init__()
+-        self.stride = stride
++        # self.stride = stride
++        self.upsample = nn.Upsample(scale_factor=stride, mode='bilinear', align_corners=True)
+     def forward(self, x):
+-        stride = self.stride
+-        assert(x.data.dim() == 4)
+-        B = x.data.size(0)
+-        C = x.data.size(1)
+-        H = x.data.size(2)
+-        W = x.data.size(3)
+-        ws = stride
+-        hs = stride
+-        x = x.view(B, C, H, 1, W, 1).expand(B, C, H, hs, W, ws).contiguous().view(B, C, H*hs, W*ws)
++        x = self.upsample(x)
+         return x
+ 
+ class Reorg(nn.Module):
+@@ -101,19 +94,25 @@ class Darknet(nn.Module):
+         # default format : major=0, minor=1
+         self.header = torch.IntTensor([0,1,0,0])
+         self.seen = 0
++        self.out_boxes = dict()
+ 
+     def forward(self, x):
++
+         ind = -2
+         self.loss_layers = None
+         outputs = dict()
+-        out_boxes = dict()
++        obbox = []
+         outno = 0
++
+         for block in self.blocks:
++
+             ind = ind + 1
++            # print(self.models[ind])
+ 
+             if block['type'] == 'net':
+                 continue
+             elif block['type'] in ['convolutional', 'maxpool', 'reorg', 'upsample', 'avgpool', 'softmax', 'connected']:
++
+                 x = self.models[ind](x)
+                 outputs[ind] = x
+             elif block['type'] == 'route':
+@@ -140,21 +139,31 @@ class Darknet(nn.Module):
+                 outputs[ind] = x
+             elif block['type'] in [ 'region', 'yolo']:
+                 boxes = self.models[ind].get_mask_boxes(x)
+-                out_boxes[outno]= boxes
++
++                if self.models[ind].__class__.__name__ == "YoloLayer":
++                    obbox.append(x)
++
++                self.out_boxes[outno]= boxes
+                 outno += 1
+                 outputs[ind] = None
+             elif block['type'] == 'cost':
+                 continue
+             else:
+                 print('unknown type %s' % (block['type']))
+-        return x if outno == 0 else out_boxes
++
++        if outno == 0:
++            return x
++        else:
++            # return out_boxes[0]['x'], out_boxes[0]['a'], out_boxes[0]['n'].float(), out_boxes[1]['x'], out_boxes[1]['a'], out_boxes[1]['n'].float(), out_boxes[2]['x'], out_boxes[2]['a'], out_boxes[2]['n'].float()
++            return obbox[0], obbox[1], obbox[2]
++        # return x if outno == 0 else out_boxes
+ 
+     def print_network(self):
+         print_cfg(self.blocks)
+ 
+     def create_network(self, blocks):
+         models = nn.ModuleList()
+-    
++
+         prev_filters = 3
+         out_filters =[]
+         prev_stride = 1
+@@ -191,7 +200,7 @@ class Darknet(nn.Module):
+                 prev_filters = filters
+                 out_filters.append(prev_filters)
+                 prev_stride = stride * prev_stride
+-                out_strides.append(prev_stride)                
++                out_strides.append(prev_stride)
+                 models.append(model)
+             elif block['type'] == 'maxpool':
+                 pool_size = int(block['size'])
+@@ -202,7 +211,7 @@ class Darknet(nn.Module):
+                     model = MaxPoolStride1()
+                 out_filters.append(prev_filters)
+                 prev_stride = stride * prev_stride
+-                out_strides.append(prev_stride)                
++                out_strides.append(prev_stride)
+                 models.append(model)
+             elif block['type'] == 'avgpool':
+                 model = GlobalAvgPool2d()
+@@ -228,13 +237,13 @@ class Darknet(nn.Module):
+                 prev_filters = stride * stride * prev_filters
+                 out_filters.append(prev_filters)
+                 prev_stride = prev_stride * stride
+-                out_strides.append(prev_stride)                
++                out_strides.append(prev_stride)
+                 models.append(Reorg(stride))
+             elif block['type'] == 'upsample':
+                 stride = int(block['stride'])
+                 out_filters.append(prev_filters)
+                 prev_stride = prev_stride / stride
+-                out_strides.append(prev_stride)                
++                out_strides.append(prev_stride)
+                 #models.append(nn.Upsample(scale_factor=stride, mode='nearest'))
+                 models.append(Upsample(stride))
+             elif block['type'] == 'route':
+@@ -311,15 +320,15 @@ class Darknet(nn.Module):
+                 yolo_layer.net_height = self.height
+                 out_filters.append(prev_filters)
+                 out_strides.append(prev_stride)
+-                models.append(yolo_layer)                
++                models.append(yolo_layer)
+             else:
+                 print('unknown type %s' % (block['type']))
+-    
++
+         return models
+ 
+     def load_binfile(self, weightfile):
+         fp = open(weightfile, 'rb')
+-       
++
+         version = np.fromfile(fp, count=3, dtype=np.int32)
+         version = [int(i) for i in version]
+         if version[0]*10+version[1] >=2 and version[0] < 1000 and version[1] < 1000:
+@@ -415,7 +424,7 @@ class Darknet(nn.Module):
+             elif block['type'] == 'reorg':
+                 pass
+             elif block['type'] == 'upsample':
+-                pass                
++                pass
+             elif block['type'] == 'route':
+                 pass
+             elif block['type'] == 'shortcut':
+diff --git a/detector/YOLOv3/detector.py b/detector/YOLOv3/detector.py
+index 8fb302b..ddfeee7 100644
+--- a/detector/YOLOv3/detector.py
++++ b/detector/YOLOv3/detector.py
+@@ -18,6 +18,7 @@ class YOLOv3(object):
+         logger.info('Loading weights from %s... Done!' % (weightfile))
+         self.device = "cuda" if use_cuda else "cpu"
+         self.net.eval()
++        torch.save(self.net, './yolov3_3out.pth')
+         self.net.to(self.device)
+ 
+         # constants
+@@ -41,14 +42,10 @@ class YOLOv3(object):
+         # forward
+         with torch.no_grad():
+             img = img.to(self.device)
+-            out_boxes = self.net(img)
+-            boxes = get_all_boxes(out_boxes, self.conf_thresh, self.num_classes,
+-                                  use_cuda=self.use_cuda)  # batch size is 1
+-            # boxes = nms(boxes, self.nms_thresh)
+-
++            _, _, _, = self.net(img)
++            boxes = get_all_boxes(self.net.out_boxes, self.conf_thresh, self.num_classes, use_cuda=self.use_cuda)
+             boxes = post_process(boxes, self.net.num_classes, self.conf_thresh, self.nms_thresh)[0].cpu()
+-            boxes = boxes[boxes[:, -2] > self.score_thresh, :]  # bbox xmin ymin xmax ymax
+-
++            boxes = boxes[boxes[:, -2] > self.score_thresh, :]
+         if len(boxes) == 0:
+             bbox = torch.FloatTensor([]).reshape([0, 4])
+             cls_conf = torch.FloatTensor([])
+diff --git a/lyncompile.py b/lyncompile.py
+new file mode 100755
+index 0000000..0e8f8da
+--- /dev/null
++++ b/lyncompile.py
+@@ -0,0 +1,28 @@
++import os
++import lyngor as lyn
++import argparse
++
++def lyn_compile(model_path, shapes, out_path):
++    model = lyn.DLModel()
++    model.load(model_path, model_type='Pytorch', inputs_dict={'input1':shapes})
++    offline_builder = lyn.Builder(target='apu', is_map=True, chip_num=1)
++    r_engine = offline_builder.build(model.graph, model.params,out_path=out_path)
++
++def parse_args():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--yolo_path", type=str, default="./yolov3_3out.pth")
++    parser.add_argument("--yolo_shape", type=tuple, default=(1, 3, 416, 416))
++    parser.add_argument("--compiled_yolo", type=str, default="./yolo_tmp_net")
++    parser.add_argument("--track_path", type=str, default="./track.pth")
++    parser.add_argument("--track_shape", type=str, default=(1, 3, 128, 64))
++    parser.add_argument("--compiled_track", type=str, default="./track_tmp_net")
++    return parser.parse_args()
++
++if __name__ == "__main__":
++    args = parse_args()
++    if not os.path.exists(args.yolo_path) or not os.path.exists(args.track_path):
++        os.system('python3 deepsort.py test.png')
++    lyn_compile(args.yolo_path, args.yolo_shape, args.compiled_yolo)
++    import sys
++    sys.path.append("./thirdparty/fast-reid/")
++    lyn_compile(args.track_path, args.track_shape, args.compiled_track)
+\ No newline at end of file
+diff --git a/lyninference.py b/lyninference.py
+new file mode 100755
+index 0000000..35ba41c
+--- /dev/null
++++ b/lyninference.py
+@@ -0,0 +1,205 @@
++import torch
++import logging
++import numpy as np
++import argparse
++import sys
++import os
++sys.path.append(os.path.join(os.path.dirname(__file__), 'thirdparty/fast-reid'))
++import cv2
++import lynpy
++from detector.YOLOv3.darknet import Darknet
++from detector.YOLOv3.yolo_utils import get_all_boxes, nms, post_process, xywh_to_xyxy, xyxy_to_xywh
++from detector.YOLOv3.nms import boxes_nms
++import time
++from utils.parser import get_config
++from deep_sort.sort.nn_matching import NearestNeighborDistanceMetric
++from deep_sort.sort.preprocessing import non_max_suppression
++from deep_sort.sort.detection import Detection
++from deep_sort.sort.tracker import Tracker
++import torchvision.transforms as transforms
++
++class YOLOv3(object):
++    def __init__(self, cfgfile, namesfile, model_path, device=0, score_thresh=0.5, conf_thresh=0.01, nms_thresh=0.4):
++        self.net = Darknet(cfgfile)
++        self.lynnet = lynpy.Model(path= model_path + "/Net_0", dev_id=device)
++        self.size = self.net.width, self.net.height
++        self.score_thresh = score_thresh
++        self.conf_thresh = conf_thresh
++        self.nms_thresh = nms_thresh
++        self.num_classes = self.net.num_classes
++        self.class_names = self.load_class_names(namesfile)
++
++    def __call__(self, ori_img):
++        assert isinstance(ori_img, np.ndarray), "input must be a numpy array!"
++        img = ori_img.astype(np.float) / 255.
++        img = cv2.resize(img, self.size)
++        img = np.expand_dims(np.transpose(img, (2,0,1)), axis=0).astype('float32')
++        out_boxes = {}
++        inputs = self.lynnet.input_tensor().from_numpy(img).apu()
++        starts = time.time()
++        self.lynnet(inputs)
++        lynout = self.lynnet.output_list()[0]
++        ends = time.time() - starts
++        print("detections infer time: ", ends)
++        out_boxes[0] = self.net.models[82].get_mask_boxes(torch.tensor(lynout[0].cpu().numpy()))
++        out_boxes[1] = self.net.models[94].get_mask_boxes(torch.tensor(lynout[1].cpu().numpy()))
++        out_boxes[2] = self.net.models[106].get_mask_boxes(torch.tensor(lynout[2].cpu().numpy()))
++        boxes = get_all_boxes(out_boxes, self.conf_thresh, self.num_classes, use_cuda=False)
++        boxes = post_process(boxes, self.net.num_classes, self.conf_thresh, self.nms_thresh)[0].cpu()
++        boxes = boxes[boxes[:, -2] > self.score_thresh, :]
++
++        if len(boxes) == 0:
++            bbox = torch.FloatTensor([]).reshape([0, 4])
++            cls_conf = torch.FloatTensor([])
++            cls_ids = torch.LongTensor([])
++        else:
++            height, width = ori_img.shape[:2]
++            bbox = boxes[:, :4]
++            bbox = xyxy_to_xywh(bbox)
++            bbox *= torch.FloatTensor([[width, height, width, height]])
++            cls_conf = boxes[:, 5]
++            cls_ids = boxes[:, 6].long()
++        return bbox.numpy(), cls_conf.numpy(), cls_ids.numpy()
++
++    def load_class_names(self, namesfile):
++        with open(namesfile, 'r', encoding='utf8') as fp:
++            class_names = [line.strip() for line in fp.readlines()]
++        return class_names
++
++class Extractor(object):
++    def __init__(self, lyn_model_path, device=0, use_cuda=False):
++        self.device = "cuda" if torch.cuda.is_available() and use_cuda else "cpu"
++        logger = logging.getLogger("root.tracker")
++        logger.info("Loading weights from {}... Done!".format("**"))
++        self.lyntracker = lynpy.Model(path=lyn_model_path+"/Net_0", dev_id=device)
++        self.size = (64, 128)
++        self.norm = transforms.Compose([transforms.ToTensor(), transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),])
++
++    def _preprocess(self, im_crops):
++        def _resize(im, size):
++            return cv2.resize(im.astype(np.float32)/255., size)
++        im_batch = torch.cat([self.norm(_resize(im, self.size)).unsqueeze(0) for im in im_crops], dim=0).float()
++        return im_batch
++
++    def __call__(self, im_crops):
++        im_batch = self._preprocess(im_crops)
++        with torch.no_grad():
++            im_batch = im_batch.to(self.device)
++            out_batches = []
++            im_batch = im_batch.contiguous().numpy()
++            for i in range(im_batch.shape[0]):
++                inputs = self.lyntracker.input_tensor().from_numpy(im_batch[i]).apu()
++                self.lyntracker(inputs)
++                lynout = self.lyntracker.output_list()[0][0].cpu().numpy()
++                out_batches.append(lynout)
++        out_batches = np.concatenate(out_batches, axis=0)
++        return out_batches
++
++class DeepSort(object):
++    def __init__(self, model_config=None, device=0, lyn_model_path='track_tmp_net', max_dist=0.2, min_confidence=0.3, nms_max_overlap=1.0, max_iou_distance=0.7, max_age=70, n_init=3, nn_budget=100, use_cuda=False):
++        self.min_confidence = min_confidence
++        self.nms_max_overlap = nms_max_overlap
++
++        self.extractor = Extractor(lyn_model_path, device, use_cuda=use_cuda)
++        max_cosine_distance = max_dist
++        metric = NearestNeighborDistanceMetric("cosine", max_cosine_distance, nn_budget)
++        self.tracker = Tracker(metric, max_iou_distance=max_iou_distance, max_age=max_age, n_init=n_init)
++
++    def update(self, bbox_xywh, confidences, ori_img):
++        self.height, self.width = ori_img.shape[:2]
++        # generate detections
++        features = self._get_features(bbox_xywh, ori_img)
++        bbox_tlwh = self._xywh_to_tlwh(bbox_xywh)
++        detections = [Detection(bbox_tlwh[i], conf, features[i]) for i,conf in enumerate(confidences) if conf>self.min_confidence]
++
++        # run on non-maximum supression
++        boxes = np.array([d.tlwh for d in detections])
++        scores = np.array([d.confidence for d in detections])
++        indices = non_max_suppression(boxes, self.nms_max_overlap, scores)
++        detections = [detections[i] for i in indices]
++
++        # update tracker
++        self.tracker.predict()
++        self.tracker.update(detections)
++
++        # output bbox identities
++        outputs = []
++        for track in self.tracker.tracks:
++            if not track.is_confirmed() or track.time_since_update > 1:
++                continue
++            box = track.to_tlwh()
++            x1,y1,x2,y2 = self._tlwh_to_xyxy(box)
++            track_id = track.track_id
++            outputs.append(np.array([x1,y1,x2,y2,track_id], dtype=np.int))
++        if len(outputs) > 0:
++            outputs = np.stack(outputs,axis=0)
++        return outputs
++
++    @staticmethod
++    def _xywh_to_tlwh(bbox_xywh):
++        if isinstance(bbox_xywh, np.ndarray):
++            bbox_tlwh = bbox_xywh.copy()
++        elif isinstance(bbox_xywh, torch.Tensor):
++            bbox_tlwh = bbox_xywh.clone()
++        bbox_tlwh[:,0] = bbox_xywh[:,0] - bbox_xywh[:,2]/2.
++        bbox_tlwh[:,1] = bbox_xywh[:,1] - bbox_xywh[:,3]/2.
++        return bbox_tlwh
++
++    def _xywh_to_xyxy(self, bbox_xywh):
++        x,y,w,h = bbox_xywh
++        x1 = max(int(x-w/2),0)
++        x2 = min(int(x+w/2),self.width-1)
++        y1 = max(int(y-h/2),0)
++        y2 = min(int(y+h/2),self.height-1)
++        return x1,y1,x2,y2
++
++    def _tlwh_to_xyxy(self, bbox_tlwh):
++        x,y,w,h = bbox_tlwh
++        x1 = max(int(x),0)
++        x2 = min(int(x+w),self.width-1)
++        y1 = max(int(y),0)
++        y2 = min(int(y+h),self.height-1)
++        return x1,y1,x2,y2
++
++    def _xyxy_to_tlwh(self, bbox_xyxy):
++        x1,y1,x2,y2 = bbox_xyxy
++        t = x1
++        l = y1
++        w = int(x2-x1)
++        h = int(y2-y1)
++        return t,l,w,h
++    def _get_features(self, bbox_xywh, ori_img):
++        im_crops = []
++        for box in bbox_xywh:
++            x1,y1,x2,y2 = self._xywh_to_xyxy(box)
++            im = ori_img[y1:y2,x1:x2]
++            im_crops.append(im)
++        if im_crops:
++            features = self.extractor(im_crops)
++        else:
++            features = np.array([])
++        return features
++
++from deepsort import VideoTracker, parse_args
++
++if __name__ == "__main__":
++    args = parse_args()
++    cfg = get_config()
++    if args.mmdet:
++        cfg.merge_from_file(args.config_mmdetection)
++        cfg.USE_MMDET = True
++    else:
++        cfg.merge_from_file(args.config_detection)
++        cfg.USE_MMDET = False
++    cfg.merge_from_file(args.config_deepsort)
++    print(args.fastreid)
++    if args.fastreid:
++        cfg.merge_from_file(args.config_fastreid)
++        cfg.USE_FASTREID = True
++    else:
++        cfg.USE_FASTREID = False
++
++    with VideoTracker(cfg, args, video_path=args.VIDEO_PATH) as vdo_trk:
++        vdo_trk.detector = YOLOv3('./detector/YOLOv3/cfg/yolo_v3.cfg', './detector/YOLOv3/cfg/coco.names', './yolo_tmp_net', device=0)
++        vdo_trk.deepsort = DeepSort(device=0, lyn_model_path='track_tmp_net')
++        vdo_trk.run()
+diff --git a/requirements.txt b/requirements.txt
+index 1288fd5..acf8713 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -33,9 +33,9 @@ PyYAML==5.4
+ scikit-learn==0.22.2.post1
+ scipy==1.4.1
+ six==1.14.0
+-sklearn==0.0
+-torch==1.4.0
+-torchvision==0.5.0
++torchvision==0.8.0
++torch==1.7.0
++torchvision==0.8.0
+ Vizer==0.1.5
+ wcwidth==0.1.9
+ xmltodict==0.12.0
+-- 
+2.7.4
+

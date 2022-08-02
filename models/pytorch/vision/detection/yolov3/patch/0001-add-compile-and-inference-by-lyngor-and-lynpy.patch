@@ -1,0 +1,378 @@
+From 6e9666119d0e5a08d20c4f4fd3126b68b41422ed Mon Sep 17 00:00:00 2001
+From: sparkssjj <doc_killer@163.com>
+Date: Fri, 29 Jul 2022 17:01:22 +0800
+Subject: [PATCH] add compile and inference by lyngor and lynpy
+
+---
+ detector/YOLOv3/darknet.py  |  47 ++++++++++----------
+ detector/YOLOv3/detector.py |  15 ++++---
+ lyncompile.py               |  24 ++++++++++
+ lyninference.py             | 106 ++++++++++++++++++++++++++++++++++++++++++++
+ requirements.txt            |   4 +-
+ 5 files changed, 165 insertions(+), 31 deletions(-)
+ mode change 100644 => 100755 detector/YOLOv3/darknet.py
+ mode change 100644 => 100755 detector/YOLOv3/detector.py
+ create mode 100755 lyncompile.py
+ create mode 100755 lyninference.py
+ mode change 100644 => 100755 requirements.txt
+
+diff --git a/detector/YOLOv3/darknet.py b/detector/YOLOv3/darknet.py
+old mode 100644
+new mode 100755
+index da6d3c0..b4f52ac
+--- a/detector/YOLOv3/darknet.py
++++ b/detector/YOLOv3/darknet.py
+@@ -16,17 +16,9 @@ class MaxPoolStride1(nn.Module):
+ class Upsample(nn.Module):
+     def __init__(self, stride=2):
+         super(Upsample, self).__init__()
+-        self.stride = stride
++        self.upsample = nn.Upsample(scale_factor=stride, mode='bilinear', align_corners=True)
+     def forward(self, x):
+-        stride = self.stride
+-        assert(x.data.dim() == 4)
+-        B = x.data.size(0)
+-        C = x.data.size(1)
+-        H = x.data.size(2)
+-        W = x.data.size(3)
+-        ws = stride
+-        hs = stride
+-        x = x.view(B, C, H, 1, W, 1).expand(B, C, H, hs, W, ws).contiguous().view(B, C, H*hs, W*ws)
++        x = self.upsample(x)
+         return x
+ 
+ class Reorg(nn.Module):
+@@ -101,16 +93,17 @@ class Darknet(nn.Module):
+         # default format : major=0, minor=1
+         self.header = torch.IntTensor([0,1,0,0])
+         self.seen = 0
++        self.out_boxes = dict()
+ 
+     def forward(self, x):
+         ind = -2
+         self.loss_layers = None
+         outputs = dict()
+-        out_boxes = dict()
++        obbox = []
+         outno = 0
++
+         for block in self.blocks:
+             ind = ind + 1
+-
+             if block['type'] == 'net':
+                 continue
+             elif block['type'] in ['convolutional', 'maxpool', 'reorg', 'upsample', 'avgpool', 'softmax', 'connected']:
+@@ -140,21 +133,29 @@ class Darknet(nn.Module):
+                 outputs[ind] = x
+             elif block['type'] in [ 'region', 'yolo']:
+                 boxes = self.models[ind].get_mask_boxes(x)
+-                out_boxes[outno]= boxes
++
++                if self.models[ind].__class__.__name__ == "YoloLayer":
++                    obbox.append(x) 
++
++                self.out_boxes[outno]= boxes
+                 outno += 1
+                 outputs[ind] = None
+             elif block['type'] == 'cost':
+                 continue
+             else:
+                 print('unknown type %s' % (block['type']))
+-        return x if outno == 0 else out_boxes
++
++        if outno == 0:
++            return x
++        else:
++            return obbox[0], obbox[1], obbox[2]
+ 
+     def print_network(self):
+         print_cfg(self.blocks)
+ 
+     def create_network(self, blocks):
+         models = nn.ModuleList()
+-    
++
+         prev_filters = 3
+         out_filters =[]
+         prev_stride = 1
+@@ -191,7 +192,7 @@ class Darknet(nn.Module):
+                 prev_filters = filters
+                 out_filters.append(prev_filters)
+                 prev_stride = stride * prev_stride
+-                out_strides.append(prev_stride)                
++                out_strides.append(prev_stride)
+                 models.append(model)
+             elif block['type'] == 'maxpool':
+                 pool_size = int(block['size'])
+@@ -202,7 +203,7 @@ class Darknet(nn.Module):
+                     model = MaxPoolStride1()
+                 out_filters.append(prev_filters)
+                 prev_stride = stride * prev_stride
+-                out_strides.append(prev_stride)                
++                out_strides.append(prev_stride)
+                 models.append(model)
+             elif block['type'] == 'avgpool':
+                 model = GlobalAvgPool2d()
+@@ -228,13 +229,13 @@ class Darknet(nn.Module):
+                 prev_filters = stride * stride * prev_filters
+                 out_filters.append(prev_filters)
+                 prev_stride = prev_stride * stride
+-                out_strides.append(prev_stride)                
++                out_strides.append(prev_stride)
+                 models.append(Reorg(stride))
+             elif block['type'] == 'upsample':
+                 stride = int(block['stride'])
+                 out_filters.append(prev_filters)
+                 prev_stride = prev_stride / stride
+-                out_strides.append(prev_stride)                
++                out_strides.append(prev_stride)
+                 #models.append(nn.Upsample(scale_factor=stride, mode='nearest'))
+                 models.append(Upsample(stride))
+             elif block['type'] == 'route':
+@@ -311,10 +312,10 @@ class Darknet(nn.Module):
+                 yolo_layer.net_height = self.height
+                 out_filters.append(prev_filters)
+                 out_strides.append(prev_stride)
+-                models.append(yolo_layer)                
++                models.append(yolo_layer)
+             else:
+                 print('unknown type %s' % (block['type']))
+-    
++
+         return models
+ 
+     def load_binfile(self, weightfile):
+@@ -369,7 +370,7 @@ class Darknet(nn.Module):
+             elif block['type'] == 'region':
+                 pass
+             elif block['type'] == 'yolo':
+-                pass                
++                pass
+             elif block['type'] == 'avgpool':
+                 pass
+             elif block['type'] == 'softmax':
+@@ -415,7 +416,7 @@ class Darknet(nn.Module):
+             elif block['type'] == 'reorg':
+                 pass
+             elif block['type'] == 'upsample':
+-                pass                
++                pass
+             elif block['type'] == 'route':
+                 pass
+             elif block['type'] == 'shortcut':
+diff --git a/detector/YOLOv3/detector.py b/detector/YOLOv3/detector.py
+old mode 100644
+new mode 100755
+index 8fb302b..ccb48a0
+--- a/detector/YOLOv3/detector.py
++++ b/detector/YOLOv3/detector.py
+@@ -10,7 +10,7 @@ from .nms import boxes_nms
+ 
+ class YOLOv3(object):
+     def __init__(self, cfgfile, weightfile, namesfile, score_thresh=0.7, conf_thresh=0.01, nms_thresh=0.45,
+-                 is_xywh=False, use_cuda=True):
++                 is_xywh=False, use_cuda=False):
+         # net definition
+         self.net = Darknet(cfgfile)
+         self.net.load_weights(weightfile)
+@@ -18,6 +18,7 @@ class YOLOv3(object):
+         logger.info('Loading weights from %s... Done!' % (weightfile))
+         self.device = "cuda" if use_cuda else "cpu"
+         self.net.eval()
++        torch.save(self.net, './yolov3_3out.pth')
+         self.net.to(self.device)
+ 
+         # constants
+@@ -41,8 +42,9 @@ class YOLOv3(object):
+         # forward
+         with torch.no_grad():
+             img = img.to(self.device)
+-            out_boxes = self.net(img)
+-            boxes = get_all_boxes(out_boxes, self.conf_thresh, self.num_classes,
++            _, _, _, = self.net(img)
++
++            boxes = get_all_boxes(self.net.out_boxes, self.conf_thresh, self.num_classes,
+                                   use_cuda=self.use_cuda)  # batch size is 1
+             # boxes = nms(boxes, self.nms_thresh)
+ 
+@@ -71,13 +73,14 @@ class YOLOv3(object):
+         return class_names
+ 
+ 
+-def demo():
++def demo(cfg_file, weights_file, coco_file, inputs):
+     import os
+     from vizer.draw import draw_boxes
+ 
+-    yolo = YOLOv3("cfg/yolo_v3.cfg", "weight/yolov3.weights", "cfg/coco.names")
++    yolo = YOLOv3(cfg_file, weights_file, coco_file)
+     print("yolo.size =", yolo.size)
+-    root = "./demo"
++    root = inputs
++
+     resdir = os.path.join(root, "results")
+     os.makedirs(resdir, exist_ok=True)
+     files = [os.path.join(root, file) for file in os.listdir(root) if file.endswith('.jpg')]
+diff --git a/lyncompile.py b/lyncompile.py
+new file mode 100755
+index 0000000..ecf7564
+--- /dev/null
++++ b/lyncompile.py
+@@ -0,0 +1,24 @@
++import os
++from detector.YOLOv3.detector import demo
++import lyngor as lyn
++import argparse
++
++def lyn_compile(model_path, shapes, out_path):
++    model = lyn.DLModel()
++    model.load(model_path, model_type='Pytorch', inputs_dict={'input1':shapes})
++    offline_builder = lyn.Builder(target='apu', is_map=True, chip_num=1)
++    r_engine = offline_builder.build(model.graph, model.params,out_path=out_path)
++
++def parse_args():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--model_path", type=str, default="./yolov3_3out.pth")
++    parser.add_argument("--input_shape", type=tuple, default=(1, 3, 416, 416))
++    parser.add_argument("--compiled_path", type=str, default="./yolo_tmp_net")
++    return parser.parse_args()
++
++if __name__ == "__main__":
++    args = parse_args()
++    if not os.path.exists('yolov3_3out.pth'):
++        demo("./detector/YOLOv3/cfg/yolo_v3.cfg", "./detector/YOLOv3/weight/yolov3.weights", "./detector/YOLOv3/cfg/coco.names", "./detector/YOLOv3/demo")
++
++    lyn_compile(args.model_path, args.input_shape, args.compiled_path)
+\ No newline at end of file
+diff --git a/lyninference.py b/lyninference.py
+new file mode 100755
+index 0000000..0a6f8ee
+--- /dev/null
++++ b/lyninference.py
+@@ -0,0 +1,106 @@
++import torch
++import numpy as np
++import argparse
++import sys
++import os
++import cv2
++import lynpy
++from detector.YOLOv3.darknet import Darknet
++from detector.YOLOv3.yolo_utils import get_all_boxes, nms, post_process, xywh_to_xyxy, xyxy_to_xywh
++from detector.YOLOv3.nms import boxes_nms
++import time
++
++class YOLOv3(object):
++    def __init__(self, cfgfile, namesfile, model_path, device=0, score_thresh=0.7, conf_thresh=0.01, nms_thresh=0.45,
++                is_xywh=False, use_cuda=False):
++        # net definition
++        self.net = Darknet(cfgfile)
++        self.lynnet = lynpy.Model(path= model_path + "/Net_0", dev_id=device)
++
++        # constants
++        self.size = self.net.width, self.net.height
++        self.score_thresh = score_thresh
++        self.conf_thresh = conf_thresh
++        self.nms_thresh = nms_thresh
++        self.use_cuda = use_cuda
++        self.is_xywh = is_xywh
++        self.num_classes = self.net.num_classes
++        self.class_names = self.load_class_names(namesfile)
++
++    def __call__(self, ori_img):
++        # img to tensor
++        assert isinstance(ori_img, np.ndarray), "input must be a numpy array!"
++        img = ori_img.astype(np.float) / 255.
++        img = cv2.resize(img, self.size)
++        img = np.expand_dims(np.transpose(img, (2,0,1)), axis=0).astype('float32')
++        img = np.ascontiguousarray(img)
++        out_boxes = {}
++        inputs = self.lynnet.input_tensor().from_numpy(img).apu()
++        starts = time.time()
++        self.lynnet(inputs)
++        lynout = self.lynnet.output_list()[0]
++        ends = time.time() - starts
++        # print("detections infer time: ", ends)
++        out_boxes[0] = self.net.models[82].get_mask_boxes(torch.tensor(lynout[0].cpu().numpy()))
++        out_boxes[1] = self.net.models[94].get_mask_boxes(torch.tensor(lynout[1].cpu().numpy()))
++        out_boxes[2] = self.net.models[106].get_mask_boxes(torch.tensor(lynout[2].cpu().numpy()))
++        boxes = get_all_boxes(out_boxes, self.conf_thresh, self.num_classes, use_cuda=False)
++        boxes = post_process(boxes, self.net.num_classes, self.conf_thresh, self.nms_thresh)[0].cpu()
++        boxes = boxes[boxes[:, -2] > self.score_thresh, :]
++
++
++        if len(boxes) == 0:
++            bbox = torch.FloatTensor([]).reshape([0, 4])
++            cls_conf = torch.FloatTensor([])
++            cls_ids = torch.LongTensor([])
++        else:
++            height, width = ori_img.shape[:2]
++            bbox = boxes[:, :4]
++            if self.is_xywh:
++                # bbox x y w h
++                bbox = xyxy_to_xywh(bbox)
++
++            bbox *= torch.FloatTensor([[width, height, width, height]])
++            cls_conf = boxes[:, 5]
++            cls_ids = boxes[:, 6].long()
++        return bbox.numpy(), cls_conf.numpy(), cls_ids.numpy()
++
++    def load_class_names(self, namesfile):
++        with open(namesfile, 'r', encoding='utf8') as fp:
++            class_names = [line.strip() for line in fp.readlines()]
++        return class_names
++
++def demo(indir):
++    import os
++    from vizer.draw import draw_boxes
++
++    yolo = YOLOv3("./detector/YOLOv3/cfg/yolo_v3.cfg", "./detector/YOLOv3/cfg/coco.names", "./yolo_tmp_net", device=0)
++    print("yolo.size =", yolo.size)
++    root = indir
++    resdir = os.path.join(root, "results")
++    os.makedirs(resdir, exist_ok=True)
++    files = [os.path.join(root, file) for file in os.listdir(root) if file.endswith('.jpg')]
++    files.sort()
++    for filename in files:
++        img = cv2.imread(filename)
++        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
++        bbox, cls_conf, cls_ids = yolo(img)
++
++        if bbox is not None:
++            img = draw_boxes(img, bbox, cls_ids, cls_conf, class_name_map=yolo.class_names)
++        # save results
++        cv2.imwrite(os.path.join(resdir, os.path.basename(filename)), img[:, :, (2, 1, 0)])
++        # imshow
++        # cv2.namedWindow("yolo", cv2.WINDOW_NORMAL)
++        # cv2.resizeWindow("yolo", 600,600)
++        # cv2.imshow("yolo",img[:,:,(2,1,0)])
++        # cv2.waitKey(0)
++
++
++if __name__ == "__main__":
++    argc = len(sys.argv)
++    if argc != 2:
++        print('usage: python3 lyninference.py <image_path>')
++        assert(argc == 2)
++
++    demo(sys.argv[1])
+diff --git a/requirements.txt b/requirements.txt
+old mode 100644
+new mode 100755
+index 1288fd5..30f8e08
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -34,8 +34,8 @@ scikit-learn==0.22.2.post1
+ scipy==1.4.1
+ six==1.14.0
+ sklearn==0.0
+-torch==1.4.0
+-torchvision==0.5.0
++torch==1.7.0
++torchvision==0.8.0
+ Vizer==0.1.5
+ wcwidth==0.1.9
+ xmltodict==0.12.0
+-- 
+2.7.4
+
