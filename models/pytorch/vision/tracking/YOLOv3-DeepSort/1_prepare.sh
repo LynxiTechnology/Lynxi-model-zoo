@@ -36,6 +36,6 @@ fi
 cd $source_dir
 # apply patch
 git apply --reject ../patch/*.patch
-pip3 ninja==1.10.2.3 install mmdet==2.25.1 mmcv-full==1.6.1 yacs==0.1.8 termcolor==1.1.0 faiss-cpu==1.7.2 tabulate==0.8.10 tensorboard==2.9.1
+pip3 install ninja==1.10.2.3 mmdet==2.25.1 mmcv-full==1.6.1 yacs==0.1.8 termcolor==1.1.0 faiss-cpu==1.7.2 tabulate==0.8.10 tensorboard==2.9.1
 pip3 install -r requirements.txt
 cd $cur_dir
