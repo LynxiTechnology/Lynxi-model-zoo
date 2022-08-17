@@ -1,0 +1,223 @@
+From 65c9d87f0c8ab67c28a9361703ebaf3e7710d68a Mon Sep 17 00:00:00 2001
+From: "zhou.zhou" <zhou.zhou@lynxi.com>
+Date: Fri, 29 Jul 2022 14:13:24 +0800
+Subject: [PATCH] add modify code
+
+---
+ .../deep/reid/torchreid/utils/feature_extractor.py | 48 +++++++++++++++++++++-
+ track.py                                           | 31 +++++++++++---
+ yolov5/models/yolo.py                              | 39 +++++++++++++-----
+ 3 files changed, 100 insertions(+), 18 deletions(-)
+
+diff --git a/strong_sort/deep/reid/torchreid/utils/feature_extractor.py b/strong_sort/deep/reid/torchreid/utils/feature_extractor.py
+index 83635fd..8251856 100644
+--- a/strong_sort/deep/reid/torchreid/utils/feature_extractor.py
++++ b/strong_sort/deep/reid/torchreid/utils/feature_extractor.py
+@@ -9,6 +9,7 @@ from torchreid.utils import (
+ )
+ from torchreid.models import build_model
+ 
++import lynpy, os, time       ### add ---
+ 
+ class FeatureExtractor(object):
+     """A simple API for feature extraction.
+@@ -76,6 +77,8 @@ class FeatureExtractor(object):
+         )
+         model.eval()
+ 
++        self.lyn_osnet = lynpy.Model(path=os.environ["MODEL_OSNET"]+"/Net_0", dev_id=int(os.environ["DEV_ID1"]))  # add ---
++
+         if verbose:
+             num_params, flops = compute_model_complexity(
+                 model, (1, 3, image_size[0], image_size[1])
+@@ -147,6 +150,49 @@ class FeatureExtractor(object):
+             raise NotImplementedError
+ 
+         with torch.no_grad():
+-            features = self.model(images)
++            # features = self.model(images)
++            model_bs = int(os.environ["BATCH_SIZE"])
++            bs = images.numpy().shape[0]                                                ### add ---
++            if bs <= model_bs:
++                bs_repeat = model_bs - bs   
++                if bs_repeat:
++                    input_tensor = torch.cat((images, images[bs-1].expand(bs_repeat, 3, 256, 128)))
++                else:
++                    input_tensor = images
++                input_data = np.ascontiguousarray(input_tensor.numpy().transpose(0,2,3,1).astype("float16"))
++                tt1 = time.time()
++                input = self.lyn_osnet.input_tensor().from_numpy(input_data).apu()
++                apu = self.lyn_osnet(input).cpu().view_as(shape=(model_bs, 512), dtype="float16")
++                tt2 = time.time() - tt1 
++                print(f" ### [Features] cost time is {tt2:.4f}s, {1/tt2:.1f}fps")
++                features = torch.from_numpy(apu.numpy()[:bs, ]).float()
++
++            else:
++                bs_int = int(bs/model_bs)  
++                bs_last = bs - bs_int*model_bs
++                bs_repeat = model_bs - bs_last       
++                cost_time = 0
++                apu_list = []
++                for i in range(bs_int):
++                    input_tensor1 = images[ model_bs*i : model_bs*(i+1), ]
++                    input_data1 = np.ascontiguousarray(input_tensor1.numpy().transpose(0,2,3,1).astype("float16"))
++                    tt1 = time.time()
++                    input1 = self.lyn_osnet.input_tensor().from_numpy(input_data1).apu()
++                    apu_each = self.lyn_osnet(input1).cpu().view_as(shape=(model_bs, 512), dtype="float16").numpy()
++                    cost_time += time.time() - tt1 
++                    apu_list.append(apu_each.copy())   
++
++                if bs_repeat:
++                    input_tensor2 = torch.cat((images[model_bs*bs_int:,], images[bs-1].expand(bs_repeat, 3, 256, 128)))
++                    input_data2 = np.ascontiguousarray(input_tensor2.numpy().transpose(0,2,3,1).astype("float16"))
++                    tt2 = time.time()
++                    input2 = self.lyn_osnet.input_tensor().from_numpy(input_data2).apu()
++                    apu_last = self.lyn_osnet(input2).cpu().view_as(shape=(model_bs, 512), dtype="float16").numpy()
++                    cost_time += time.time() - tt2
++                    apu_list.append(apu_last[:bs_last,].copy())
++                print(f" ### [Features] cost time is {cost_time:.4f}s, {1/cost_time:.1f}fps")
++
++                apu_all = np.concatenate(apu_list)   
++                features = torch.from_numpy(apu_all).float()   
+ 
+         return features
+diff --git a/track.py b/track.py
+index 0c97a86..f289ab3 100644
+--- a/track.py
++++ b/track.py
+@@ -39,6 +39,8 @@ from strong_sort.strong_sort import StrongSORT
+ # remove duplicated stream handler to avoid duplicated logging
+ logging.getLogger().removeHandler(logging.getLogger().handlers[0])
+ 
++import lynpy                 ### add ---
++
+ @torch.no_grad()
+ def run(
+         source='0',
+@@ -97,14 +99,18 @@ def run(
+     stride, names, pt = model.stride, model.names, model.pt
+     imgsz = check_img_size(imgsz, s=stride)  # check image size
+ 
++    lyn_yolov5s = lynpy.Model(path=os.environ["MODEL_YOLOVS"]+"/Net_0", dev_id=int(os.environ["DEV_ID0"]))   # add ---
++
+     # Dataloader
+     if webcam:
+         show_vid = check_imshow()
+         cudnn.benchmark = True  # set True to speed up constant image size inference
+-        dataset = LoadStreams(source, img_size=imgsz, stride=stride, auto=pt)
++        # dataset = LoadStreams(source, img_size=imgsz, stride=stride, auto=pt)
++        dataset = LoadStreams(source, img_size=imgsz, stride=stride, auto=False)    ###  ---
+         nr_sources = len(dataset)
+     else:
+-        dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt)
++        # dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=pt)
++        dataset = LoadImages(source, img_size=imgsz, stride=stride, auto=False)     ### ---
+         nr_sources = 1
+     vid_path, vid_writer, txt_path = [None] * nr_sources, [None] * nr_sources, [None] * nr_sources
+ 
+@@ -138,16 +144,29 @@ def run(
+     for frame_idx, (path, im, im0s, vid_cap, s) in enumerate(dataset):
+         t1 = time_sync()
+         im = torch.from_numpy(im).to(device)
+-        im = im.half() if half else im.float()  # uint8 to fp16/32
+-        im /= 255.0  # 0 - 255 to 0.0 - 1.0
++        img_uint8 = im.clone().detach()              ### add ---
+         if len(im.shape) == 3:
+-            im = im[None]  # expand for batch dim
++            img_uint8 = img_uint8[None]
++        input_yolov5s = img_uint8.permute(0, 2, 3, 1).cpu().numpy() 
++
++        # im = im.half() if half else im.float()  # uint8 to fp16/32
++        # im /= 255.0  # 0 - 255 to 0.0 - 1.0
++        # if len(im.shape) == 3:
++        #     im = im[None]  # expand for batch dim
+         t2 = time_sync()
+         dt[0] += t2 - t1
+ 
+         # Inference
+         visualize = increment_path(save_dir / Path(path[0]).stem, mkdir=True) if visualize else False
+-        pred = model(im, augment=augment, visualize=visualize)
++        # pred = model(im, augment=augment, visualize=visualize)
++        tt1 = time_sync()                                                   ### add ---
++        input = lyn_yolov5s.input_tensor().from_numpy(input_yolov5s).apu() 
++        apu_yolov5s = lyn_yolov5s(input).cpu().view_as(shape=(1,25200,85), dtype="float16")  
++        tt2 = time_sync() - tt1 
++        print(f" ### [Yolov5s] cost time is {tt2:.4f}s, {1/tt2:.1f}fps")
++        pred = torch.from_numpy(apu_yolov5s.numpy()).float()
++        im = img_uint8
++                
+         t3 = time_sync()
+         dt[1] += t3 - t2
+ 
+diff --git a/yolov5/models/yolo.py b/yolov5/models/yolo.py
+index 02660e6..7fc47b1 100644
+--- a/yolov5/models/yolo.py
++++ b/yolov5/models/yolo.py
+@@ -56,36 +56,53 @@ class Detect(nn.Module):
+         for i in range(self.nl):
+             x[i] = self.m[i](x[i])  # conv
+             bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
+-            x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
++            # x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
++            x[i] = x[i].permute(0, 2, 3, 1)                                             ### abc set ----
++            x[i] = x[i].view(1, ny*nx, bs * self.na , self.no).contiguous()   
+ 
+             if not self.training:  # inference
+                 if self.onnx_dynamic or self.grid[i].shape[2:4] != x[i].shape[2:4]:
+                     self.grid[i], self.anchor_grid[i] = self._make_grid(nx, ny, i)
+ 
++                self.grid[i] = self.grid[i].repeat(bs, 1, 1, 1)                          ### abc set ---            
++                self.anchor_grid[i] = self.anchor_grid[i].repeat(bs, 1, 1, 1) 
++                grid_shape = self.grid[i].shape
++                self.grid[i] = self.grid[i].permute(1, 2, 0, 3).view(1, -1, grid_shape[0], grid_shape[-1]).contiguous() 
++                anchor_grid_shape = self.anchor_grid[i].shape
++                self.anchor_grid[i] = self.anchor_grid[i].permute(1, 2, 0, 3).view(1, -1, anchor_grid_shape[0], anchor_grid_shape[-1]).contiguous() 
++                self.inplace = False        ### add
++
+                 y = x[i].sigmoid()
+                 if self.inplace:
+                     y[..., 0:2] = (y[..., 0:2] * 2 + self.grid[i]) * self.stride[i]  # xy
+                     y[..., 2:4] = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
+                 else:  # for YOLOv5 on AWS Inferentia https://github.com/ultralytics/yolov5/pull/2953
+-                    xy, wh, conf = y.split((2, 2, self.nc + 1), 4)  # y.tensor_split((2, 4, 5), 4)  # torch 1.8.0
+-                    xy = (xy * 2 + self.grid[i]) * self.stride[i]  # xy
+-                    wh = (wh * 2) ** 2 * self.anchor_grid[i]  # wh
+-                    y = torch.cat((xy, wh, conf), 4)
+-                z.append(y.view(bs, -1, self.no))
+-
+-        return x if self.training else (torch.cat(z, 1),) if self.export else (torch.cat(z, 1), x)
++                    # xy, wh, conf = y.split((2, 2, self.nc + 1), 4)  # y.tensor_split((2, 4, 5), 4)  # torch 1.8.0
++                    # xy = (xy * 2 + self.grid[i]) * self.stride[i]  # xy
++                    # wh = (wh * 2) ** 2 * self.anchor_grid[i]  # wh
++                    # y = torch.cat((xy, wh, conf), 4)
++                    xy = (y[..., 0:2] * 2 + self.grid[i]) * self.stride[i]  # xy
++                    wh = (y[..., 2:4] * 2) ** 2 * self.anchor_grid[i]  # wh
++                    y = torch.cat((xy, wh, y[..., 4:]), -1)                    
++                # z.append(y.view(bs, -1, self.no))
++                z.append(y.permute(0, 2, 1, 3)) 
++
++        # return x if self.training else (torch.cat(z, 1),) if self.export else (torch.cat(z, 1), x)
++        return z[0], z[1], z[2]                                                                           ### abc set ---
+ 
+     def _make_grid(self, nx=20, ny=20, i=0):
+         d = self.anchors[i].device
+         t = self.anchors[i].dtype
+-        shape = 1, self.na, ny, nx, 2  # grid shape
++        shape = 1, self.na, ny, nx, 2  # grid shape                                            
+         y, x = torch.arange(ny, device=d, dtype=t), torch.arange(nx, device=d, dtype=t)
+         if check_version(torch.__version__, '1.10.0'):  # torch>=1.10.0 meshgrid workaround for torch>=0.7 compatibility
+             yv, xv = torch.meshgrid(y, x, indexing='ij')
+         else:
+             yv, xv = torch.meshgrid(y, x)
+-        grid = torch.stack((xv, yv), 2).expand(shape) - 0.5  # add grid offset, i.e. y = 2.0 * x - 0.5
+-        anchor_grid = (self.anchors[i] * self.stride[i]).view((1, self.na, 1, 1, 2)).expand(shape)
++        # grid = torch.stack((xv, yv), 2).expand(shape) - 0.5  # add grid offset, i.e. y = 2.0 * x - 0.5
++        # anchor_grid = (self.anchors[i] * self.stride[i]).view((1, self.na, 1, 1, 2)).expand(shape)
++        grid = torch.stack((xv, yv), 2).expand((self.na, ny, nx, 2)) - 0.5                                  ### 5D -> 4D ---
++        anchor_grid = (self.anchors[i] * self.stride[i]).view((self.na, 1, 1, 2)).expand((self.na, ny, nx, 2))  
+         return grid, anchor_grid
+ 
+ 
+-- 
+2.7.4
+
