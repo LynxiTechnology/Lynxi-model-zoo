@@ -34,7 +34,7 @@ def run():
     sample = infer(sys.argv[1], model_data)
     sample.dtype = np.dtype("float16")              # add 
     loss = lyn_loss(sample, golden)
-    print(f'=======[run_yolov5] test done, loss({loss})=======')
+    print(f'======= test done, loss({loss})=======')
 
 
 # 测试误差率 -----------------
