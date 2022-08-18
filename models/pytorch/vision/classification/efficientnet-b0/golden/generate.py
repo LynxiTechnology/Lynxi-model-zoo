@@ -2,9 +2,6 @@ import sys
 import torch
 import numpy as np
 from efficientnet_pytorch import EfficientNet
-from torchvision import transforms
-from PIL import Image
-import json
 
 argc = len(sys.argv)
 if argc != 3:
