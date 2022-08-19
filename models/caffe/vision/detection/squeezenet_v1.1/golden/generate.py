@@ -4,7 +4,7 @@ import caffe
 
 argc = len(sys.argv)
 if argc != 4:
-    print('usage: python3 verify.py <model_file> <input_shapes>')
+    print('usage: python3 verify.py <model_file> <model_weights> <input_shapes>')
     assert(argc == 4)
 
 model_file = sys.argv[1]
@@ -19,5 +19,5 @@ net.blobs['data'].data[...] = input_data
 
 out = net.forward()['prob']
 
-input_data.tofile('input.bin')
-out.tofile('output.bin')   
+input_data.astype("float16").transpose(0,2,3,1).tofile('input.bin')
+out.astype("float16").tofile('output.bin')     
