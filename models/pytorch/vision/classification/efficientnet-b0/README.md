@@ -1,7 +1,7 @@
 ## 支持列表
 - [x] efficientnet-b0 @224x224
 - [ ] efficientnet-b1 @224x224
-- [ ] efficientnet-b2 @224x224
+- [x] efficientnet-b2 @224x224
 - [ ] efficientnet-b3 @224x224
 - [ ] efficientnet-b4 @224x224
 - [ ] efficientnet-b5 @224x224
