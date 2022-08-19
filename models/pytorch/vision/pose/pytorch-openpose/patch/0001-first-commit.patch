@@ -1,0 +1,1199 @@
+From be884813f6c335d730d3adce50d9578cc34d4559 Mon Sep 17 00:00:00 2001
+From: "jiachao.ye" <jiachao.ye@lynxi.com>
+Date: Fri, 19 Aug 2022 09:46:19 +0800
+Subject: [PATCH] first commit
+
+---
+ demo.py                     |   6 +-
+ lyn_demo.py                 | 323 ++++++++++++++++++++++++++++
+ lyn_inference_body_model.py | 106 ++++++++++
+ lyn_inference_hand_model.py | 118 +++++++++++
+ lyncompile_body_model.py    |  25 +++
+ lyncompile_hand_model.py    |  36 ++++
+ lynpy.py                    | 504 ++++++++++++++++++++++++++++++++++++++++++++
+ 7 files changed, 1116 insertions(+), 2 deletions(-)
+ mode change 100644 => 100755 demo.py
+ create mode 100644 lyn_demo.py
+ create mode 100755 lyn_inference_body_model.py
+ create mode 100755 lyn_inference_hand_model.py
+ create mode 100755 lyncompile_body_model.py
+ create mode 100755 lyncompile_hand_model.py
+ create mode 100755 lynpy.py
+
+diff --git a/demo.py b/demo.py
+old mode 100644
+new mode 100755
+index 34ff7f4..7222a89
+--- a/demo.py
++++ b/demo.py
+@@ -18,7 +18,6 @@ canvas = copy.deepcopy(oriImg)
+ canvas = util.draw_bodypose(canvas, candidate, subset)
+ # detect hand
+ hands_list = util.handDetect(candidate, subset, oriImg)
+-
+ all_hand_peaks = []
+ for x, y, w, is_left in hands_list:
+     # cv2.rectangle(canvas, (x, y), (x+w, y+w), (0, 255, 0), 2, lineType=cv2.LINE_AA)
+@@ -41,4 +40,7 @@ canvas = util.draw_handpose(canvas, all_hand_peaks)
+ 
+ plt.imshow(canvas[:, :, [2, 1, 0]])
+ plt.axis('off')
+-plt.show()
++
++plt.savefig("/data/jiachao.ye/pytorch-openpose/golden/pytorch_result.png")
++# plt.show()
++
+diff --git a/lyn_demo.py b/lyn_demo.py
+new file mode 100644
+index 0000000..c040a2b
+--- /dev/null
++++ b/lyn_demo.py
+@@ -0,0 +1,323 @@
++import cv2
++import matplotlib.pyplot as plt
++import copy
++import numpy as np
++import lyngor as lyn
++import lynpy
++
++from src import model
++from src import util
++from src.body import Body
++from src.hand import Hand
++
++from scipy.ndimage.filters import gaussian_filter
++import math
++from skimage.measure import label
++
++
++
++class Body(object):
++    def __init__(self, model_path):
++        # self.model = bodypose_model()
++        # if torch.cuda.is_available():
++        #     self.model = self.model.cuda()
++        # model_dict = util.transfer(self.model, torch.load(model_path))
++        # self.model.load_state_dict(model_dict)
++        # self.model.eval()
++        self.lynnet=lynpy.Model(path=model_path,dev_id=0)
++
++    def __call__(self, oriImg):
++        # scale_search = [0.5, 1.0, 1.5, 2.0]
++        scale_search = [0.5]
++        boxsize = 368
++        stride = 8
++        padValue = 128
++        thre1 = 0.1
++        thre2 = 0.05
++        multiplier = [x * boxsize / oriImg.shape[0] for x in scale_search]
++        heatmap_avg = np.zeros((oriImg.shape[0], oriImg.shape[1], 19))
++        paf_avg = np.zeros((oriImg.shape[0], oriImg.shape[1], 38))
++
++        for m in range(len(multiplier)):
++            scale = multiplier[m]
++            imageToTest = cv2.resize(oriImg, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
++            imageToTest_padded, pad = util.padRightDownCorner(imageToTest, stride, padValue)
++
++            #固定输入尺寸为184*200
++            y=200-imageToTest_padded.shape[1]
++            imageToTest_padded2 = cv2.copyMakeBorder(imageToTest_padded, 0, 0, 0, y, cv2.BORDER_CONSTANT, value=[128, 128, 128])
++            # cv2.imwrite("im.jpg",imageToTest_padded2)
++
++            im = np.transpose(np.float32(imageToTest_padded2[:, :, :, np.newaxis]), (3, 2, 0, 1)) / 256 - 0.5
++            im = np.ascontiguousarray(im)
++
++            inputs = self.lynnet.input_tensor().from_numpy(im).apu()
++            self.lynnet(inputs)
++            result = self.lynnet.output_list()[0]
++
++            Mconv7_stage6_L1 = result[0].cpu().numpy()
++            Mconv7_stage6_L2 = result[1].cpu().numpy()
++
++            # data = data.permute([2, 0, 1]).unsqueeze(0).float()
++            # with torch.no_grad():
++            #     Mconv7_stage6_L1, Mconv7_stage6_L2 = self.model(data)
++            # Mconv7_stage6_L1 = Mconv7_stage6_L1.cpu().numpy()
++            # Mconv7_stage6_L2 = Mconv7_stage6_L2.cpu().numpy()
++
++            # extract outputs, resize, and remove padding
++            # heatmap = np.transpose(np.squeeze(net.blobs[output_blobs.keys()[1]].data), (1, 2, 0))  # output 1 is heatmaps
++            heatmap = np.transpose(np.squeeze(Mconv7_stage6_L2), (1, 2, 0))  # output 1 is heatmaps
++            heatmap = cv2.resize(heatmap, (0, 0), fx=stride, fy=stride, interpolation=cv2.INTER_CUBIC)
++            heatmap = heatmap[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
++            heatmap = cv2.resize(heatmap, (oriImg.shape[1], oriImg.shape[0]), interpolation=cv2.INTER_CUBIC)
++
++            # paf = np.transpose(np.squeeze(net.blobs[output_blobs.keys()[0]].data), (1, 2, 0))  # output 0 is PAFs
++            paf = np.transpose(np.squeeze(Mconv7_stage6_L1), (1, 2, 0))  # output 0 is PAFs
++            paf = cv2.resize(paf, (0, 0), fx=stride, fy=stride, interpolation=cv2.INTER_CUBIC)
++            paf = paf[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
++            paf = cv2.resize(paf, (oriImg.shape[1], oriImg.shape[0]), interpolation=cv2.INTER_CUBIC)
++
++            heatmap_avg += heatmap_avg + heatmap / len(multiplier)
++            paf_avg += + paf / len(multiplier)
++
++        all_peaks = []
++        peak_counter = 0
++
++        for part in range(18):
++            map_ori = heatmap_avg[:, :, part]
++            one_heatmap = gaussian_filter(map_ori, sigma=3)
++
++            map_left = np.zeros(one_heatmap.shape)
++            map_left[1:, :] = one_heatmap[:-1, :]
++            map_right = np.zeros(one_heatmap.shape)
++            map_right[:-1, :] = one_heatmap[1:, :]
++            map_up = np.zeros(one_heatmap.shape)
++            map_up[:, 1:] = one_heatmap[:, :-1]
++            map_down = np.zeros(one_heatmap.shape)
++            map_down[:, :-1] = one_heatmap[:, 1:]
++
++            peaks_binary = np.logical_and.reduce(
++                (one_heatmap >= map_left, one_heatmap >= map_right, one_heatmap >= map_up, one_heatmap >= map_down, one_heatmap > thre1))
++            peaks = list(zip(np.nonzero(peaks_binary)[1], np.nonzero(peaks_binary)[0]))  # note reverse
++            peaks_with_score = [x + (map_ori[x[1], x[0]],) for x in peaks]
++            peak_id = range(peak_counter, peak_counter + len(peaks))
++            peaks_with_score_and_id = [peaks_with_score[i] + (peak_id[i],) for i in range(len(peak_id))]
++
++            all_peaks.append(peaks_with_score_and_id)
++            peak_counter += len(peaks)
++
++        # find connection in the specified sequence, center 29 is in the position 15
++        limbSeq = [[2, 3], [2, 6], [3, 4], [4, 5], [6, 7], [7, 8], [2, 9], [9, 10], \
++                   [10, 11], [2, 12], [12, 13], [13, 14], [2, 1], [1, 15], [15, 17], \
++                   [1, 16], [16, 18], [3, 17], [6, 18]]
++        # the middle joints heatmap correpondence
++        mapIdx = [[31, 32], [39, 40], [33, 34], [35, 36], [41, 42], [43, 44], [19, 20], [21, 22], \
++                  [23, 24], [25, 26], [27, 28], [29, 30], [47, 48], [49, 50], [53, 54], [51, 52], \
++                  [55, 56], [37, 38], [45, 46]]
++
++        connection_all = []
++        special_k = []
++        mid_num = 10
++
++        for k in range(len(mapIdx)):
++            score_mid = paf_avg[:, :, [x - 19 for x in mapIdx[k]]]
++            candA = all_peaks[limbSeq[k][0] - 1]
++            candB = all_peaks[limbSeq[k][1] - 1]
++            nA = len(candA)
++            nB = len(candB)
++            indexA, indexB = limbSeq[k]
++            if (nA != 0 and nB != 0):
++                connection_candidate = []
++                for i in range(nA):
++                    for j in range(nB):
++                        vec = np.subtract(candB[j][:2], candA[i][:2])
++                        norm = math.sqrt(vec[0] * vec[0] + vec[1] * vec[1])
++                        norm = max(0.001, norm)
++                        vec = np.divide(vec, norm)
++
++                        startend = list(zip(np.linspace(candA[i][0], candB[j][0], num=mid_num), \
++                                            np.linspace(candA[i][1], candB[j][1], num=mid_num)))
++
++                        vec_x = np.array([score_mid[int(round(startend[I][1])), int(round(startend[I][0])), 0] \
++                                          for I in range(len(startend))])
++                        vec_y = np.array([score_mid[int(round(startend[I][1])), int(round(startend[I][0])), 1] \
++                                          for I in range(len(startend))])
++
++                        score_midpts = np.multiply(vec_x, vec[0]) + np.multiply(vec_y, vec[1])
++                        score_with_dist_prior = sum(score_midpts) / len(score_midpts) + min(
++                            0.5 * oriImg.shape[0] / norm - 1, 0)
++                        criterion1 = len(np.nonzero(score_midpts > thre2)[0]) > 0.8 * len(score_midpts)
++                        criterion2 = score_with_dist_prior > 0
++                        if criterion1 and criterion2:
++                            connection_candidate.append(
++                                [i, j, score_with_dist_prior, score_with_dist_prior + candA[i][2] + candB[j][2]])
++
++                connection_candidate = sorted(connection_candidate, key=lambda x: x[2], reverse=True)
++                connection = np.zeros((0, 5))
++                for c in range(len(connection_candidate)):
++                    i, j, s = connection_candidate[c][0:3]
++                    if (i not in connection[:, 3] and j not in connection[:, 4]):
++                        connection = np.vstack([connection, [candA[i][3], candB[j][3], s, i, j]])
++                        if (len(connection) >= min(nA, nB)):
++                            break
++
++                connection_all.append(connection)
++            else:
++                special_k.append(k)
++                connection_all.append([])
++
++        # last number in each row is the total parts number of that person
++        # the second last number in each row is the score of the overall configuration
++        subset = -1 * np.ones((0, 20))
++        candidate = np.array([item for sublist in all_peaks for item in sublist])
++
++        for k in range(len(mapIdx)):
++            if k not in special_k:
++                partAs = connection_all[k][:, 0]
++                partBs = connection_all[k][:, 1]
++                indexA, indexB = np.array(limbSeq[k]) - 1
++
++                for i in range(len(connection_all[k])):  # = 1:size(temp,1)
++                    found = 0
++                    subset_idx = [-1, -1]
++                    for j in range(len(subset)):  # 1:size(subset,1):
++                        if subset[j][indexA] == partAs[i] or subset[j][indexB] == partBs[i]:
++                            subset_idx[found] = j
++                            found += 1
++
++                    if found == 1:
++                        j = subset_idx[0]
++                        if subset[j][indexB] != partBs[i]:
++                            subset[j][indexB] = partBs[i]
++                            subset[j][-1] += 1
++                            subset[j][-2] += candidate[partBs[i].astype(int), 2] + connection_all[k][i][2]
++                    elif found == 2:  # if found 2 and disjoint, merge them
++                        j1, j2 = subset_idx
++                        membership = ((subset[j1] >= 0).astype(int) + (subset[j2] >= 0).astype(int))[:-2]
++                        if len(np.nonzero(membership == 2)[0]) == 0:  # merge
++                            subset[j1][:-2] += (subset[j2][:-2] + 1)
++                            subset[j1][-2:] += subset[j2][-2:]
++                            subset[j1][-2] += connection_all[k][i][2]
++                            subset = np.delete(subset, j2, 0)
++                        else:  # as like found == 1
++                            subset[j1][indexB] = partBs[i]
++                            subset[j1][-1] += 1
++                            subset[j1][-2] += candidate[partBs[i].astype(int), 2] + connection_all[k][i][2]
++
++                    # if find no partA in the subset, create a new subset
++                    elif not found and k < 17:
++                        row = -1 * np.ones(20)
++                        row[indexA] = partAs[i]
++                        row[indexB] = partBs[i]
++                        row[-1] = 2
++                        row[-2] = sum(candidate[connection_all[k][i, :2].astype(int), 2]) + connection_all[k][i][2]
++                        subset = np.vstack([subset, row])
++        # delete some rows of subset which has few parts occur
++        deleteIdx = []
++        for i in range(len(subset)):
++            if subset[i][-1] < 4 or subset[i][-2] / subset[i][-1] < 0.4:
++                deleteIdx.append(i)
++        subset = np.delete(subset, deleteIdx, axis=0)
++
++        # subset: n*20 array, 0-17 is the index in candidate, 18 is the total score, 19 is the total parts
++        # candidate: x, y, score, id
++        return candidate, subset
++
++class Hand(object):
++    def __init__(self, model_path1,model_path2):
++
++        self.lynnet1=lynpy.Model(path=model_path1,dev_id=0)
++        self.lynnet2=lynpy.Model(path=model_path2,dev_id=0)
++
++    def __call__(self, oriImg):
++        scale_search = [0.5, 1.0]
++        # scale_search = [0.5]
++        boxsize = 368
++        stride = 8
++        padValue = 128
++        thre = 0.05
++        multiplier = [x * boxsize / oriImg.shape[0] for x in scale_search]
++        heatmap_avg = np.zeros((oriImg.shape[0], oriImg.shape[1], 22))
++        # paf_avg = np.zeros((oriImg.shape[0], oriImg.shape[1], 38))
++        ff=0
++        for m in range(len(multiplier)):
++            scale = multiplier[m]
++            imageToTest = cv2.resize(oriImg, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
++            imageToTest_padded, pad = util.padRightDownCorner(imageToTest, stride, padValue)
++            im = np.transpose(np.float32(imageToTest_padded[:, :, :, np.newaxis]), (3, 2, 0, 1)) / 256 - 0.5
++            im = np.ascontiguousarray(im)
++
++            if ff==0:
++                lynnet=self.lynnet1
++            elif ff==1:
++                lynnet=self.lynnet2
++
++            inputs = lynnet.input_tensor().from_numpy(im).apu()
++            lynnet(inputs)
++            result = lynnet.output_list()[0]
++            output = result[0].cpu().numpy()
++
++            # extract outputs, resize, and remove padding
++            heatmap = np.transpose(np.squeeze(output), (1, 2, 0))  # output 1 is heatmaps
++            heatmap = cv2.resize(heatmap, (0, 0), fx=stride, fy=stride, interpolation=cv2.INTER_CUBIC)
++            heatmap = heatmap[:imageToTest_padded.shape[0] - pad[2], :imageToTest_padded.shape[1] - pad[3], :]
++            heatmap = cv2.resize(heatmap, (oriImg.shape[1], oriImg.shape[0]), interpolation=cv2.INTER_CUBIC)
++
++            heatmap_avg += heatmap / len(multiplier)
++            ff+=1
++
++        all_peaks = []
++        for part in range(21):
++            map_ori = heatmap_avg[:, :, part]
++            one_heatmap = gaussian_filter(map_ori, sigma=3)
++            binary = np.ascontiguousarray(one_heatmap > thre, dtype=np.uint8)
++            # 全部小于阈值
++            if np.sum(binary) == 0:
++                all_peaks.append([0, 0])
++                continue
++            label_img, label_numbers = label(binary, return_num=True, connectivity=binary.ndim)
++            max_index = np.argmax([np.sum(map_ori[label_img == i]) for i in range(1, label_numbers + 1)]) + 1
++            label_img[label_img != max_index] = 0
++            map_ori[label_img == 0] = 0
++
++            y, x = util.npmax(map_ori)
++            all_peaks.append([x, y])
++        return np.array(all_peaks)
++
++
++body_estimation = Body('body_184x200_model/Net_0/')
++hand_estimation = Hand('hand_184x184_model/Net_0/','hand_368x368_model/Net_0/')
++
++test_image = 'images/demo.jpg'
++oriImg = cv2.imread(test_image)  # B,G,R order
++candidate, subset = body_estimation(oriImg)
++canvas = copy.deepcopy(oriImg)
++canvas = util.draw_bodypose(canvas, candidate, subset)
++# # detect hand
++hands_list = util.handDetect(candidate, subset, oriImg)
++
++all_hand_peaks = []
++for x, y, w, is_left in hands_list:
++    # cv2.rectangle(canvas, (x, y), (x+w, y+w), (0, 255, 0), 2, lineType=cv2.LINE_AA)
++    # cv2.putText(canvas, 'left' if is_left else 'right', (x, y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
++
++    # if is_left:
++        # plt.imshow(oriImg[y:y+w, x:x+w, :][:, :, [2, 1, 0]])
++        # plt.show()
++    peaks = hand_estimation(oriImg[y:y+w, x:x+w, :])
++    peaks[:, 0] = np.where(peaks[:, 0]==0, peaks[:, 0], peaks[:, 0]+x)
++    peaks[:, 1] = np.where(peaks[:, 1]==0, peaks[:, 1], peaks[:, 1]+y)
++    # else:
++    #     peaks = hand_estimation(cv2.flip(oriImg[y:y+w, x:x+w, :], 1))
++    #     peaks[:, 0] = np.where(peaks[:, 0]==0, peaks[:, 0], w-peaks[:, 0]-1+x)
++    #     peaks[:, 1] = np.where(peaks[:, 1]==0, peaks[:, 1], peaks[:, 1]+y)
++    #     print(peaks)
++    all_hand_peaks.append(peaks)
++
++canvas = util.draw_handpose(canvas, all_hand_peaks)
++
++plt.imshow(canvas[:, :, [2, 1, 0]])
++plt.axis('off')
++
++plt.savefig("/data/jiachao.ye/pytorch-openpose/golden/lynxi_result.png")
++plt.show()
+diff --git a/lyn_inference_body_model.py b/lyn_inference_body_model.py
+new file mode 100755
+index 0000000..f61161d
+--- /dev/null
++++ b/lyn_inference_body_model.py
+@@ -0,0 +1,106 @@
++import cv2
++import numpy as np
++import lyngor as lyn
++import lynpy
++import math
++import time
++import torch
++from src import util
++from src.model import bodypose_model
++
++
++def compare_result(apu_x, torch_y, flag):
++    ret = np.sqrt(np.sum((np.float32(apu_x)-np.float32(torch_y))**2))/np.sqrt(np.sum(np.float32(apu_x)**2))
++    print(f'[compart_result]{flag} the error value of apu and origin model is: {ret}') 
++
++# 加载lyngor模型
++# r_engine=lyn.load(path='body_184x200_model/Net_0/',device=0)  #lyngor加载
++lynnet=lynpy.Model(path='body_184x200_model/Net_0/',dev_id=0)  #lynpy加载
++
++#加载torch模型
++cpu_model_path="model/body_pose_model.pth"
++cpu_model = bodypose_model()
++cpu_model_dict = util.transfer(cpu_model, torch.load(cpu_model_path))
++cpu_model.load_state_dict(cpu_model_dict)
++cpu_model.eval()
++
++test_image = 'images/demo.jpg'
++oriImg = cv2.imread(test_image)
++
++scale_search = [0.5]
++boxsize = 368
++stride = 8
++padValue = 128
++multiplier = [x * boxsize / oriImg.shape[0] for x in scale_search]
++
++
++
++for m in range(len(multiplier)):
++    scale = multiplier[m]
++    imageToTest = cv2.resize(oriImg, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
++    imageToTest_padded, pad = util.padRightDownCorner(imageToTest, stride, padValue)
++
++    #固定输入尺寸为184*200
++    y=200-imageToTest_padded.shape[1]
++    imageToTest_padded2 = cv2.copyMakeBorder(imageToTest_padded, 0, 0, 0, y, cv2.BORDER_CONSTANT, value=[128, 128, 128])
++    cv2.imwrite("im.jpg",imageToTest_padded2)
++
++    im = np.transpose(np.float32(imageToTest_padded2[:, :, :, np.newaxis]), (3, 2, 0, 1)) / 256 - 0.5
++    im = np.ascontiguousarray(im)
++
++    data = torch.from_numpy(im).float()
++    # data = data.permute([2, 0, 1]).unsqueeze(0).float()
++    print("模型输入数据： ",data.shape)
++    print("==================cpu测试=====================")
++    with torch.no_grad():
++
++        #循环10次推理
++        x=0
++        while x<10:
++            starts = time.time()
++            Mconv7_stage6_L1, Mconv7_stage6_L2 = cpu_model(data)
++            ends = time.time() - starts
++            print(x,"===time:",ends)
++            x+=1
++        starts = time.time()
++        Mconv7_stage6_L1, Mconv7_stage6_L2 = cpu_model(data)
++        ends = 1/(time.time() - starts)
++        print("=============cpu帧率:",ends)
++
++    Mconv7_stage6_L1 = Mconv7_stage6_L1.cpu().numpy()
++    print("cpu推理输出数据1：",Mconv7_stage6_L1.shape)
++    
++    
++    Mconv7_stage6_L2 = Mconv7_stage6_L2.cpu().numpy()
++    print("cpu推理输出数据2：",Mconv7_stage6_L2.shape)
++    print("==========================================")
++
++    print("==================apu测试=====================")
++    #lynpy推理
++    inputs = lynnet.input_tensor().from_numpy(im).apu()
++    #循环10次推理，使芯片运算稳定
++    x=0
++    while x<10:
++        starts = time.time()
++        lynnet(inputs)
++        result = lynnet.output_list()[0]
++        ends = time.time() - starts
++        print(x,"===time:",ends)
++        x+=1
++
++    starts = time.time()
++    lynnet(inputs)
++    result = lynnet.output_list()[0]
++    ends = 1/(time.time() - starts)
++    print("=============apu帧率:",ends) 
++    print("apu推理输出数据1：",result[0].shape)
++    print("apu推理输出数据2：",result[1].shape)
++    print("==========================================")
++
++    rs1 = result[0].cpu().numpy()
++    rs2 = result[1].cpu().numpy()
++    compare_result(rs1,Mconv7_stage6_L1,flag="data1")
++    compare_result(rs2,Mconv7_stage6_L2,flag="data2")
++
++
++
+diff --git a/lyn_inference_hand_model.py b/lyn_inference_hand_model.py
+new file mode 100755
+index 0000000..8ce5cb1
+--- /dev/null
++++ b/lyn_inference_hand_model.py
+@@ -0,0 +1,118 @@
++import cv2
++import copy
++import numpy as np
++
++from src import model
++from src import util
++from src.body import Body
++from src.hand import Hand
++
++import lynpy
++
++import json
++import math
++import time
++from scipy.ndimage.filters import gaussian_filter
++import matplotlib.pyplot as plt
++import matplotlib
++import torch
++from skimage.measure import label
++
++from src.model import handpose_model
++from src import util
++
++def compare_result(apu_x, torch_y, flag):
++    ret = np.sqrt(np.sum((np.float32(apu_x)-np.float32(torch_y))**2))/np.sqrt(np.sum(np.float32(apu_x)**2))
++    print(f'[compart_result]{flag} the error value of apu and origin model is: {ret}') 
++
++
++test_image='images/demo.jpg'
++
++#加载torch模型
++cpu_model_path="model/hand_pose_model.pth"
++cpu_model = handpose_model()
++cpu_model_dict = util.transfer(cpu_model, torch.load(cpu_model_path))
++cpu_model.load_state_dict(cpu_model_dict)
++cpu_model.eval()
++
++#获取hand模型的输入图片
++body_estimation = Body('model/body_pose_model.pth')
++# hand_estimation = Hand('model/hand_pose_model.pth')
++
++oriImg = cv2.imread(test_image)  # B,G,R order
++candidate, subset = body_estimation(oriImg)
++canvas = copy.deepcopy(oriImg)
++canvas = util.draw_bodypose(canvas, candidate, subset)
++# detect hand
++hands_list = util.handDetect(candidate, subset, oriImg)
++
++all_hand_peaks = []
++f1=1
++for x, y, w, is_left in hands_list:
++    print("==================================hand"+str(f1)+"======================================")
++    handimg=oriImg[y:y+w, x:x+w, :]
++
++    # scale_search = [0.5, 1.0, 1.5, 2.0]
++    scale_search = [0.5, 1.0]
++    boxsize = 368
++    stride = 8
++    padValue = 128
++    multiplier = [x * boxsize / handimg.shape[0] for x in scale_search]
++    
++    ff=0
++    for m in range(len(multiplier)):
++        scale = multiplier[m]
++        imageToTest = cv2.resize(handimg, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
++        imageToTest_padded, pad = util.padRightDownCorner(imageToTest, stride, padValue)
++        im = np.transpose(np.float32(imageToTest_padded[:, :, :, np.newaxis]), (3, 2, 0, 1)) / 256 - 0.5
++        im = np.ascontiguousarray(im)
++
++        data = torch.from_numpy(im).float()
++        # print("=========================================")
++        print("模型输入数据： ",data.shape)
++
++        print("==================cpu测试=====================")
++        with torch.no_grad():
++            #循环10次推理
++            x=0
++            while x<10:
++                starts = time.time()
++                output = cpu_model(data).cpu().numpy()
++                ends = time.time() - starts
++                print(x,"===time:",ends)
++                x+=1
++            starts = time.time()
++            output = cpu_model(data).cpu().numpy()
++            ends = 1/(time.time() - starts)
++            print("=============cpu帧率:",ends)
++        print("cpu推理输出数据：",output.shape)
++        print("==========================================")
++        print("==================apu测试=====================")
++        if ff==0:
++            lynnet=lynpy.Model(path='hand_184x184_model/Net_0/',dev_id=0)
++        elif ff ==1:
++            lynnet=lynpy.Model(path='hand_368x368_model/Net_0/',dev_id=0)
++
++        inputs = lynnet.input_tensor().from_numpy(im).apu()
++
++        x=0
++        while x<10:
++            starts = time.time()
++            lynnet(inputs)
++            result = lynnet.output_list()[0]
++            ends = time.time() - starts
++            print(x,"===time:",ends)
++            x+=1
++
++        starts = time.time()
++        lynnet(inputs)
++        result = lynnet.output_list()[0]
++        ends = 1/(time.time() - starts)
++        print("=============apu帧率:",ends)
++        print("apu推理输出数据：",result[0].shape)
++        rs = result[0].cpu().numpy()
++        print("==========================================")
++        compare_result(rs,output,flag="data1")
++
++        ff=1
++    f1+=1
+diff --git a/lyncompile_body_model.py b/lyncompile_body_model.py
+new file mode 100755
+index 0000000..93405ae
+--- /dev/null
++++ b/lyncompile_body_model.py
+@@ -0,0 +1,25 @@
++import os
++import lyngor as lyn
++from src.model import bodypose_model
++from src import util
++import torch
++
++
++if not os.path.exists('body_save_model.pth'):
++    print("====creat body_save_model===")
++    torchmodel_path='model/body_pose_model.pth'
++    torchmodel = bodypose_model()
++    torchmodel_dict = util.transfer(torchmodel, torch.load(torchmodel_path))
++    torchmodel.load_state_dict(torchmodel_dict)
++    torch.save(torchmodel,"body_save_model.pth")
++
++
++model_path="body_save_model.pth"
++input_shape=(1,3,184,200)
++compiled_path="./body_184x200_model"
++
++
++model = lyn.DLModel()
++model.load(model_path, model_type='Pytorch', inputs_dict={'input1':input_shape})
++offline_builder = lyn.Builder(target='apu', is_map=True, chip_num=1)
++r_engine = offline_builder.build(model.graph, model.params,out_path=compiled_path)
+\ No newline at end of file
+diff --git a/lyncompile_hand_model.py b/lyncompile_hand_model.py
+new file mode 100755
+index 0000000..c31b7cc
+--- /dev/null
++++ b/lyncompile_hand_model.py
+@@ -0,0 +1,36 @@
++import os
++import lyngor as lyn
++from src.model import handpose_model
++from src import util
++import torch
++
++
++if not os.path.exists('hand_save_model.pth'):
++    print("====creat hand_save_model===")
++    torchmodel_path='model/hand_pose_model.pth'
++    torchmodel = handpose_model()
++    torchmodel_dict = util.transfer(torchmodel, torch.load(torchmodel_path))
++    torchmodel.load_state_dict(torchmodel_dict)
++    torch.save(torchmodel,"hand_save_model.pth")
++
++
++model_path="hand_save_model.pth"
++input_shape=(1,3,184,184)
++compiled_path="./hand_184x184_model"
++
++model = lyn.DLModel()
++model.load(model_path, model_type='Pytorch', inputs_dict={'input1':input_shape})
++offline_builder = lyn.Builder(target='apu', is_map=True, chip_num=1)
++r_engine = offline_builder.build(model.graph, model.params,out_path=compiled_path)
++
++
++
++model_path="hand_save_model.pth"
++input_shape=(1,3,368,368)
++compiled_path="./hand_368x368_model"
++
++
++model = lyn.DLModel()
++model.load(model_path, model_type='Pytorch', inputs_dict={'input1':input_shape})
++offline_builder = lyn.Builder(target='apu', is_map=True, chip_num=1)
++r_engine = offline_builder.build(model.graph, model.params,out_path=compiled_path)
+\ No newline at end of file
+diff --git a/lynpy.py b/lynpy.py
+new file mode 100755
+index 0000000..e4e513f
+--- /dev/null
++++ b/lynpy.py
+@@ -0,0 +1,504 @@
++# -*- coding: utf-8 -*-
++"""
++============================================================
++© 2018 北京灵汐科技有限公司 版权所有。
++* 注意：
++以下内容均为北京灵汐科技有限公司原创，
++未经本公司允许，不得转载，否则将视为侵权；
++对于不遵守此声明或者其他违法使用以下内容者，
++本公司依法保留追究权。
++
++© 2018 Lynxi Technologies Co., Ltd. All rights reserved.
++* NOTICE:
++All information contained here is,
++and remains the property of Lynxi.
++This file can not be copied or distributed without
++the permission of Lynxi Technologies Co., Ltd.
++============================================================
++
++@file: lynpy.py
++@author: huangfei.xiao@lynxi.com
++
++"""
++import sys
++sys.path.append('/usr/lib')
++
++
++import pylynchipsdk as sdk
++import numpy as np
++
++
++SDK_DTYPE = {
++    sdk.lyn_data_type_t.DT_INT8: 'int8',
++    sdk.lyn_data_type_t.DT_UINT8: 'uint8',
++    sdk.lyn_data_type_t.DT_INT32: 'int32',
++    sdk.lyn_data_type_t.DT_UINT32: 'uint32',
++    sdk.lyn_data_type_t.DT_FLOAT: 'float32',
++    sdk.lyn_data_type_t.DT_FLOAT16: 'float16',
++}
++
++class Tensor(object):
++    '''lynpy.Tensor is a common data object which used to manage the data on device memory.
++    '''
++
++    def __init__(self, dev_id=0, size=0, allocate=True):
++        """init function.
++
++        Parameters
++        ----------
++        dev_id : int32
++            set which the device to be used.
++
++        size : int32
++            the tensor size in bytes.
++
++        allocate : True or False
++            True, will allcate device memory when create tensor.
++            False, allcate when tensor.apu(), or can set tensor.devptr manually.
++        """
++        super(Tensor, self).__init__()
++        self.__numpydata = None
++        self.devptr = None
++        self.__child = False
++        self.data_size = size
++        self.dev_id = dev_id
++
++        ##
++        # from numpy
++        self.shape = None
++        self.dtype = None
++        self.size = 0
++        self.itemsize = 0
++
++        self.context, ret = sdk.lyn_create_context(self.dev_id)
++        assert ret == 0
++
++        ##
++        # for split case, not need to allocate device memory
++        if (self.data_size != 0) and (allocate == True):
++            self.devptr, ret = sdk.lyn_malloc(self.data_size)
++            assert ret == 0
++
++    def __del__(self):
++        if (self.devptr != None) and (self.__child == False):
++            sdk.lyn_set_current_context(self.context)
++            sdk.lyn_free(self.devptr)
++        self.__numpydata = None
++        self.devptr = None
++        self.data_size = 0
++
++        sdk.lyn_destroy_context(self.context)
++
++    def __str__(self):
++        msg = 'Tensor: {} {} \n{}'.format(
++                self.__numpydata.shape,
++                self.__numpydata.dtype,
++                str(self.__numpydata))
++        return msg
++
++    def __update_numpydata_info(self):
++        self.shape = self.__numpydata.shape
++        self.dtype = self.__numpydata.dtype
++        self.size = self.__numpydata.size
++        self.itemsize = self.__numpydata.itemsize
++
++    def from_numpy(self, data):
++        """set tensor.apu() source data or tensor.cpu() destination data.
++
++        Parameters
++        ----------
++        data : numpy.ndarray or List[numpy.ndarray]
++
++        Returns
++        -------
++        Tensor : reference to self.
++        """
++        total_size = 0
++        self.__numpydata = data
++        if isinstance(data, list):
++            assert isinstance(data[0], np.ndarray)
++            for d in data:
++                total_size = total_size + d.size * d.itemsize
++        elif isinstance(data, np.ndarray):
++            total_size = data.size * data.itemsize
++            self.__update_numpydata_info()
++        else:
++            assert 0
++
++        if self.data_size == 0:
++            self.data_size = total_size
++
++        assert self.data_size == total_size, 'required {}, input {}'.format(self.data_size, total_size)
++        return self
++
++    def view_as(self, shape, dtype='float32'):
++        """change the view of data shape/dtype, will not change the data in memory.
++
++        Parameters
++        ----------
++        shape : Tuple
++
++        dtype : numpy.dtype
++
++        Returns
++        -------
++        Tensor : reference to self.
++        """
++        if self.__numpydata is None:
++            data = np.empty(shape, dtype=dtype)
++            assert self.data_size == data.size * data.itemsize, 'required {}, input {}'.format(self.data_size, data.size * data.itemsize)
++            self.__numpydata = data
++        else:
++            # force convert
++            self.__numpydata.dtype = dtype
++            self.__numpydata.shape = shape
++
++        self.__update_numpydata_info()
++        return self
++
++    def numpy(self):
++        '''return the numpy object'''
++        return self.__numpydata
++
++    def cpu(self):
++        '''copy data from server to device'''
++        assert self.data_size != 0
++        assert self.devptr != None
++
++        if self.__numpydata is None:
++            self.__numpydata = np.empty(self.data_size, dtype=np.byte)
++            self.__update_numpydata_info()
++
++        sdk.lyn_set_current_context(self.context)
++
++        if isinstance(self.__numpydata, np.ndarray):
++            assert 0 == sdk.lyn_memcpy(sdk.lyn_numpy_to_ptr(self.__numpydata),
++                                self.devptr, self.data_size,
++                                sdk.lyn_memcpy_dir_t.ServerToClient)
++        else: # numpy list
++            offset = 0
++            for d in self.__numpydata:
++                size = d.size * d.itemsize
++                assert 0 == sdk.lyn_memcpy(sdk.lyn_numpy_to_ptr(d),
++                                sdk.lyn_addr_seek(self.devptr, offset),
++                                size,
++                                sdk.lyn_memcpy_dir_t.ServerToClient)
++                offset = offset + size
++
++                assert offset > self.data_size # overflow
++
++        return self
++
++    def apu(self):
++        '''copy data from device to server'''
++        assert self.data_size != 0
++        assert self.__numpydata is not None
++
++        sdk.lyn_set_current_context(self.context)
++
++        if self.devptr == None:
++            self.devptr, ret = sdk.lyn_malloc(self.data_size)
++            assert ret == 0
++
++        if isinstance(self.__numpydata, np.ndarray):
++            assert 0 == sdk.lyn_memcpy(self.devptr,
++                            sdk.lyn_numpy_to_ptr(self.__numpydata),
++                            self.data_size,
++                            sdk.lyn_memcpy_dir_t.ClientToServer)
++        else: # numpy list
++            offset = 0
++            for d in self.__numpydata:
++                size = d.size * d.itemsize
++                assert 0 == sdk.lyn_memcpy(sdk.lyn_addr_seek(self.devptr, offset),
++                                sdk.lyn_numpy_to_ptr(d),
++                                size,
++                                sdk.lyn_memcpy_dir_t.ClientToServer)
++                offset = offset + size
++
++        return self
++
++    def split(self, size_list):
++        """split a tensor to tensor list.
++
++        Parameters
++        ----------
++        size_list : List[int32]
++            a list of size in bytes
++
++        Returns
++        -------
++        Tensor : List[Tensor]
++        """
++        assert self.devptr != None
++
++        result = []
++        offset = 0
++
++        if self.__numpydata is not None:
++            data = self.__numpydata.flatten()
++            data.dtype = np.int8
++
++        for size in size_list:
++            if offset + size > self.data_size:
++                break
++
++            new_obj = Tensor(dev_id=self.dev_id, size=size, allocate=False)
++            new_obj.devptr = sdk.lyn_addr_seek(self.devptr, offset)
++            new_obj.__child = True
++
++            if self.__numpydata is not None:
++                new_obj = new_obj.from_numpy(data[offset:offset+size])
++            result.append(new_obj)
++
++            offset = offset + size
++
++        if offset < self.data_size:
++            size = self.data_size - offset
++            new_obj = Tensor(dev_id=self.dev_id, size=size, allocate=False)
++            new_obj.devptr = sdk.lyn_addr_seek(self.devptr, offset)
++            new_obj.__child = True
++
++            if self.__numpydata is not None:
++                new_obj = new_obj.from_numpy(data[offset:])
++            result.append(new_obj)
++
++        return result
++
++    def copy_to(self, to, stream=None):
++        """copy data to another tensor. support copy tensor over device.
++
++        Parameters
++        ----------
++        stream : sdk stream object
++            if stream not none, will use asynchronous copy method.
++            will be ignored when copy tensor over device
++        """
++        assert self.data_size == to.data_size, 'required {}, input {}'.format(self.data_size, to.data_size)
++        assert self.devptr != None and to.devptr != None
++
++        # if self.dev_id == to.dev_id:
++        sdk.lyn_set_current_context(self.context)
++
++        if stream == None:
++            assert 0 == sdk.lyn_memcpy(to.devptr, self.devptr, self.data_size,
++                            sdk.lyn_memcpy_dir_t.ServerToServer)
++        else:
++            assert 0 == sdk.lyn_memcpy_async(stream, to.devptr, self.devptr, self.data_size,
++                            sdk.lyn_memcpy_dir_t.ServerToServer)
++
++        if self.__numpydata is not None:
++            to.from_numpy(self.__numpydata)
++            
++        # else:
++        #     self.cpu()
++        #     to.from_numpy(self.__numpydata)
++        #     to.apu()
++
++class Model(object):
++    '''lynpy.Model is a module to do inference.
++    '''
++    def __init__(self, dev_id=0, path=None, stream=None, sync=True):
++        """init function.
++
++        Parameters
++        ----------
++        dev_id : int32
++            set which the device to be used.
++
++        path : str
++            the model file path.
++
++        stream : sdk stream object
++            if not set, will create a default stream.
++            also can use the others stream by Model.stream.
++
++        sync : True or False
++            True, blocking wait the infering done.
++            False, should call Model.synchronize() before accsess output data.
++        """
++        super(Model, self).__init__()
++        self.path = path
++        self.dev_id = dev_id
++        self.sync = sync
++        self.stream = stream
++        self.model = None
++        self.__input = None
++        self.__output = None
++        self.__input_list = None
++        self.__output_list = None
++        self.input_size = 0
++        self.output_size = 0
++        self.batch_size = 0
++        self.__model_desc = None
++
++        self.context, ret = sdk.lyn_create_context(self.dev_id)
++        assert ret == 0
++
++        if self.stream == None:
++            self.stream, ret = sdk.lyn_create_stream()
++            assert ret == 0
++
++        if self.path != None:
++            self.load()
++
++    def __del__(self):
++        self.unload()
++        sdk.lyn_destroy_stream(self.stream)
++        sdk.lyn_destroy_context(self.context)
++
++    def __call__(self, input, output=None):
++        '''do infering'''
++        return self.infer(input, output)
++
++    def load(self, path=None):
++        '''load model from file'''
++        if self.path == None:
++            self.path = path
++        assert self.path != None
++
++        sdk.lyn_set_current_context(self.context)
++        self.model, ret = sdk.lyn_load_model(self.path)
++        assert ret == 0
++
++        self.__model_desc, ret = sdk.lyn_model_get_desc(self.model)
++        self.batch_size = self.__model_desc.inputTensorAttrArray[0].batchSize
++
++        self.input_size, ret = sdk.lyn_model_get_input_data_total_len(self.model)
++        self.output_size, ret = sdk.lyn_model_get_output_data_total_len(self.model)
++
++        self.input_size *= self.batch_size
++        # print(self.path)
++        # print(self.input_size)
++        self.output_size *= self.batch_size
++        # print(self.output_size)
++    def unload(self):
++        '''unload model'''
++        if self.model != None:
++            sdk.lyn_set_current_context(self.context)
++            sdk.lyn_unload_model(self.model)
++            self.model = None
++
++    def infer(self, input: Tensor, output: Tensor=None) -> Tensor:
++        '''do infering, can set output tensor or create automatic'''
++        assert self.model != None
++        assert input.data_size == self.input_size, 'required {}, input {}'.format(self.input_size, input.data_size)
++
++        self.__input = input
++        if output is not None:
++            assert output.data_size == self.output_size, 'required {}, input {}'.format(self.output_size, output.data_size)
++            self.__output = output
++        elif self.__output is None:
++            self.__output = Tensor(dev_id=self.dev_id, size=self.output_size)
++
++        sdk.lyn_set_current_context(self.context)
++        assert 0 == sdk.lyn_execute_model_async(self.stream, self.model,
++                                            self.__input.devptr, self.__output.devptr,
++                                            self.batch_size)
++
++        if self.sync == True:
++            assert 0 == sdk.lyn_synchronize_stream(self.stream)
++
++        return self.__output
++
++    def synchronize(self):
++        '''blocking wait for infering done'''
++        sdk.lyn_set_current_context(self.context)
++        assert 0 == sdk.lyn_synchronize_stream(self.stream)
++
++    def output_tensor(self):
++        if self.__output is None:
++            self.__output = Tensor(dev_id=self.dev_id, size=self.output_size)
++        return self.__output
++
++    def input_tensor(self):
++        if self.__input is None:
++            self.__input = Tensor(dev_id=self.dev_id, size=self.input_size)
++        return self.__input
++
++    def output_list(self):
++        """get output tensors as a list, view as below:
++
++            [batch0][tensor0, tensor1, ..., tensorX]
++            [batch1][tensor0, tensor1, ..., tensorX]
++            ...
++            [batchN][tensor0, tensor1, ..., tensorX]
++
++        Note:
++            output_list() tensors will keep the latest value with output_tensor() at device memory,
++            but the different value at host memory, you should use cpu() to synchronize data before access
++        """
++        if self.__output_list is None:
++            self.__output_list = []
++
++            if self.batch_size == 1:
++                batch_list = [self.output_tensor()]
++            else:
++                split_size = []
++                for i in range(self.batch_size):
++                    split_size.append(self.__model_desc.outputDataLen)
++                batch_list = self.output_tensor().split(split_size)
++
++            shape_list = []
++            dtype_list = []
++            tensor_size = []
++            tensor_num = self.__model_desc.outputTensorAttrArrayNum
++            for i in range(tensor_num):
++                shape, ret = sdk.lyn_model_get_output_tensor_dims_by_index(self.model, i)
++                dtype = self.__model_desc.outputTensorAttrArray[i].dtype
++                size = self.__model_desc.outputTensorAttrArray[i].dataLen
++                shape_list.append(shape)
++                dtype_list.append(SDK_DTYPE[dtype])
++                tensor_size.append(size)
++
++            for batch in batch_list:
++                tensor_list = batch.split(tensor_size)
++                for i in range(tensor_num):
++                    tensor_list[i].view_as(shape=shape_list[i], dtype=dtype_list[i])
++
++                self.__output_list.append(tensor_list)
++
++        return self.__output_list
++
++    def input_list(self):
++        """get input tensors as a list, view as below:
++
++            [batch0][tensor0, tensor1, ..., tensorX]
++            [batch1][tensor0, tensor1, ..., tensorX]
++            ...
++            [batchN][tensor0, tensor1, ..., tensorX]
++
++        Note:
++            input_list() tensors will keep the latest value with input_tensor() at device memory,
++            but the different value at host memory, you should use cpu() to synchronize data before access
++        """
++        if self.__input_list is None:
++            self.__input_list = []
++
++            if self.batch_size == 1:
++                batch_list = [self.input_tensor()]
++            else:
++                split_size = []
++                for i in range(self.batch_size):
++                    split_size.append(self.__model_desc.inputDataLen)
++                batch_list = self.input_tensor().split(split_size)
++
++            shape_list = []
++            dtype_list = []
++            tensor_size = []
++            tensor_num = self.__model_desc.inputTensorAttrArrayNum
++            for i in range(tensor_num):
++                shape, ret = sdk.lyn_model_get_input_tensor_dims_by_index(self.model, i)
++                dtype = self.__model_desc.inputTensorAttrArray[i].dtype
++                size = self.__model_desc.inputTensorAttrArray[i].dataLen
++                shape_list.append(shape)
++                dtype_list.append(SDK_DTYPE[dtype])
++                tensor_size.append(size)
++
++            for batch in batch_list:
++                tensor_list = batch.split(tensor_size)
++                for i in range(tensor_num):
++                    tensor_list[i].view_as(shape=shape_list[i], dtype=dtype_list[i])
++
++                self.__input_list.append(tensor_list)
++
++        return self.__input_list
+\ No newline at end of file
+-- 
+2.7.4
+
