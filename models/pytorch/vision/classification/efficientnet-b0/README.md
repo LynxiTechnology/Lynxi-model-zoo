@@ -1,3 +1,7 @@
+# EfficientNet-PyTorch
+
+模型来源：https://github.com/lukemelas/EfficientNet-PyTorch/
+
 ## 支持列表
 - [x] efficientnet-b0 @224x224
 - [ ] efficientnet-b1 @224x224
