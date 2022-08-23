@@ -6,6 +6,9 @@ echo "@@@@@@@@@@@@@@@@@@@@@@@@@@@"
 
 source setting.cfg
 
+if [ ! -d "$golden_dir" ]; then
+    mkdir "$golden_dir"
+fi
 
 if [ ! -d "$source_dir" ]; then
     git clone $source_url
@@ -26,15 +29,13 @@ if [ ! -f "$model1" ] && [ ! -f "$model2" ]; then
     exit
 fi
 
-
-
-cd $source_dir
-
-# # generate golden before patch
-export PYTHONPATH=$source_dir:$PYTHONPATH
-python demo.py
-
 # apply patch
 cd $source_dir
 git am ../patch/*.patch
-# cd $cur_dir
+cd $cur_dir
+
+cd $source_dir
+# # generate golden before patch
+export PYTHONPATH=$source_dir:$PYTHONPATH
+python demo.py --savers $golden_dir
+

@@ -1,54 +1,56 @@
-From be884813f6c335d730d3adce50d9578cc34d4559 Mon Sep 17 00:00:00 2001
+From c968277e346a0241a5bb43df45f1b2ce67b398be Mon Sep 17 00:00:00 2001
 From: "jiachao.ye" <jiachao.ye@lynxi.com>
-Date: Fri, 19 Aug 2022 09:46:19 +0800
-Subject: [PATCH] first commit
+Date: Tue, 23 Aug 2022 09:18:47 +0800
+Subject: [PATCH] second commit
 
 ---
- demo.py                     |   6 +-
- lyn_demo.py                 | 323 ++++++++++++++++++++++++++++
+ demo.py                     |  11 +-
+ lyn_demo.py                 | 330 +++++++++++++++++++++++++++++
  lyn_inference_body_model.py | 106 ++++++++++
  lyn_inference_hand_model.py | 118 +++++++++++
  lyncompile_body_model.py    |  25 +++
  lyncompile_hand_model.py    |  36 ++++
  lynpy.py                    | 504 ++++++++++++++++++++++++++++++++++++++++++++
- 7 files changed, 1116 insertions(+), 2 deletions(-)
- mode change 100644 => 100755 demo.py
+ 7 files changed, 1129 insertions(+), 1 deletion(-)
  create mode 100644 lyn_demo.py
- create mode 100755 lyn_inference_body_model.py
- create mode 100755 lyn_inference_hand_model.py
- create mode 100755 lyncompile_body_model.py
- create mode 100755 lyncompile_hand_model.py
- create mode 100755 lynpy.py
+ create mode 100644 lyn_inference_body_model.py
+ create mode 100644 lyn_inference_hand_model.py
+ create mode 100644 lyncompile_body_model.py
+ create mode 100644 lyncompile_hand_model.py
+ create mode 100644 lynpy.py
 
 diff --git a/demo.py b/demo.py
-old mode 100644
-new mode 100755
-index 34ff7f4..7222a89
+index 34ff7f4..c056c7a 100644
 --- a/demo.py
 +++ b/demo.py
-@@ -18,7 +18,6 @@ canvas = copy.deepcopy(oriImg)
- canvas = util.draw_bodypose(canvas, candidate, subset)
- # detect hand
- hands_list = util.handDetect(candidate, subset, oriImg)
--
- all_hand_peaks = []
- for x, y, w, is_left in hands_list:
-     # cv2.rectangle(canvas, (x, y), (x+w, y+w), (0, 255, 0), 2, lineType=cv2.LINE_AA)
-@@ -41,4 +40,7 @@ canvas = util.draw_handpose(canvas, all_hand_peaks)
+@@ -8,6 +8,13 @@ from src import util
+ from src.body import Body
+ from src.hand import Hand
+ 
++import argparse
++
++parser = argparse.ArgumentParser(
++        description="openpose detected.")
++parser.add_argument('--savers', type=str, help='result save path.')
++args = parser.parse_args()
++
+ body_estimation = Body('model/body_pose_model.pth')
+ hand_estimation = Hand('model/hand_pose_model.pth')
+ 
+@@ -41,4 +48,6 @@ canvas = util.draw_handpose(canvas, all_hand_peaks)
  
  plt.imshow(canvas[:, :, [2, 1, 0]])
  plt.axis('off')
 -plt.show()
-+
-+plt.savefig("/data/jiachao.ye/pytorch-openpose/golden/pytorch_result.png")
 +# plt.show()
-+
++savepath=args.savers+"/pytorch_result.png"
++plt.savefig(savepath)
 diff --git a/lyn_demo.py b/lyn_demo.py
 new file mode 100644
-index 0000000..c040a2b
+index 0000000..7c9d2ce
 --- /dev/null
 +++ b/lyn_demo.py
-@@ -0,0 +1,323 @@
+@@ -0,0 +1,330 @@
 +import cv2
 +import matplotlib.pyplot as plt
 +import copy
@@ -370,10 +372,17 @@ index 0000000..c040a2b
 +plt.imshow(canvas[:, :, [2, 1, 0]])
 +plt.axis('off')
 +
-+plt.savefig("/data/jiachao.ye/pytorch-openpose/golden/lynxi_result.png")
-+plt.show()
++import argparse
++
++parser = argparse.ArgumentParser(
++        description="openpose detected.")
++parser.add_argument('--savers', type=str, help='result save path.')
++args = parser.parse_args()
++
++savepath=args.savers+"/lynxi_result.png"
++plt.savefig(savepath)
 diff --git a/lyn_inference_body_model.py b/lyn_inference_body_model.py
-new file mode 100755
+new file mode 100644
 index 0000000..f61161d
 --- /dev/null
 +++ b/lyn_inference_body_model.py
@@ -485,7 +494,7 @@ index 0000000..f61161d
 +
 +
 diff --git a/lyn_inference_hand_model.py b/lyn_inference_hand_model.py
-new file mode 100755
+new file mode 100644
 index 0000000..8ce5cb1
 --- /dev/null
 +++ b/lyn_inference_hand_model.py
@@ -609,7 +618,7 @@ index 0000000..8ce5cb1
 +        ff=1
 +    f1+=1
 diff --git a/lyncompile_body_model.py b/lyncompile_body_model.py
-new file mode 100755
+new file mode 100644
 index 0000000..93405ae
 --- /dev/null
 +++ b/lyncompile_body_model.py
@@ -641,7 +650,7 @@ index 0000000..93405ae
 +r_engine = offline_builder.build(model.graph, model.params,out_path=compiled_path)
 \ No newline at end of file
 diff --git a/lyncompile_hand_model.py b/lyncompile_hand_model.py
-new file mode 100755
+new file mode 100644
 index 0000000..c31b7cc
 --- /dev/null
 +++ b/lyncompile_hand_model.py
@@ -684,7 +693,7 @@ index 0000000..c31b7cc
 +r_engine = offline_builder.build(model.graph, model.params,out_path=compiled_path)
 \ No newline at end of file
 diff --git a/lynpy.py b/lynpy.py
-new file mode 100755
+new file mode 100644
 index 0000000..e4e513f
 --- /dev/null
 +++ b/lynpy.py
