@@ -1,5 +1,7 @@
 #!/bin/bash
 
+cd ../../../../../ && source envsetup.sh && cd -
+
 source setting.cfg
 cd $source_dir
 
