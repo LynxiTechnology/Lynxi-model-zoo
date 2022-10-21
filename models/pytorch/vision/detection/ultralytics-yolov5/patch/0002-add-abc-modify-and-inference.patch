@@ -1,0 +1,103 @@
+From 0619b1df53bccefca845ad145e5f86fd6362329a Mon Sep 17 00:00:00 2001
+From: "zhou.zhou" <zhou.zhou@lynxi.com>
+Date: Fri, 21 Oct 2022 14:51:02 +0800
+Subject: [PATCH] add abc modify and inference
+
+---
+ .../lyndetect.py         | 14 +++++++-----
+ .../models/yolo.py       | 26 ++++++++++++----------
+ 2 files changed, 23 insertions(+), 17 deletions(-)
+
+diff --git a/lyndetect.py b/lyndetect.py
+index d1730aa..4f38785 100644
+--- a/lyndetect.py
++++ b/lyndetect.py
+@@ -93,7 +93,9 @@ def run(weights=ROOT / 'build_model/Net_0',  # model.pt path(s)
+     for path, img, im0s, vid_cap in dataset:
+         t1 = time_sync()
+         if True: #onnx:
+-            img = img.astype('float32')
++            if len(img.shape) == 3:
++                img = img[None]  # expand for batch dim
++            input_data = img.transpose(0,2,3,1)                              # lynxi ---
+         else:
+             img = torch.from_numpy(img).to(device)
+             img = img.half() if half else img.float()  # uint8 to fp16/32
+@@ -104,10 +106,12 @@ def run(weights=ROOT / 'build_model/Net_0',  # model.pt path(s)
+         dt[0] += t2 - t1
+ 
+         # Inference
+-        lyn_in = lyn_model.input_tensor().from_numpy(img).apu()
+-        lyn_model(lyn_in) #.cpu().view_as(shape=pred.shape)
+-        lyn_out = lyn_model.output_list()[0][0].cpu()
+-        pred = torch.from_numpy(lyn_out.numpy())
++        tt1 = time_sync()
++        lyn_in = lyn_model.input_tensor().from_numpy(input_data).apu()       # lynxi ---
++        apu = lyn_model(lyn_in).cpu().view_as(shape=(1,25200,85), dtype="float16").numpy()
++        tt2 = time_sync() - tt1 
++        print(f"  ### [SDK] cost time is {tt2:.4f}s, {1/tt2:.1f}fps")
++        pred = torch.from_numpy(apu).float()
+ 
+         t3 = time_sync()
+         dt[1] += t3 - t2
+diff --git a/models/yolo.py b/models/yolo.py
+index 2dc4e38..267acc7 100644
+--- a/models/yolo.py
++++ b/models/yolo.py
+@@ -63,7 +63,9 @@ class Detect(nn.Module):
+                 #  (bs * self.na, self.no, ny, nx)
+                 #   -> (bs * self.na, ny, nx, self.no)
+                 #   --> (bs, self.na, ny, nx, self.no)
+-                x[i] = x[i].view(bs * self.na, self.no, ny, nx).permute(0, 2, 3, 1).contiguous()
++                # x[i] = x[i].view(bs * self.na, self.no, ny, nx).permute(0, 2, 3, 1).contiguous()
++                x[i] = x[i].permute(0, 2, 3, 1)                                      # abc set 
++                x[i] = x[i].view(1, ny*nx, bs * self.na , self.no).contiguous() 
+ 
+                 self_grid, self_anchor_grid = self._make_grid(nx, ny, i)
+ 
+@@ -73,6 +75,10 @@ class Detect(nn.Module):
+                 self_grid = self_grid.repeat(bs, 1, 1, 1)
+                 self_anchor_grid = self_anchor_grid.repeat(bs, 1, 1, 1)
+                 # print(self_grid.shape, self_anchor_grid.shape)
++                grid_shape = self_grid.shape                                          # set abc 
++                self_grid = self_grid.permute(1, 2, 0, 3).view(1, -1, grid_shape[0], grid_shape[-1]).contiguous() 
++                anchor_grid_shape = self_anchor_grid.shape
++                self_anchor_grid = self_anchor_grid.permute(1, 2, 0, 3).view(1, -1, anchor_grid_shape[0], anchor_grid_shape[-1]).contiguous() 
+ 
+                 y = x[i].sigmoid()
+                 ### can't use inplace
+@@ -83,24 +89,20 @@ class Detect(nn.Module):
+                     xy = (y[..., 0:2] * 2. - 0.5 + self_grid) * self.stride[i]  # xy
+                     wh = (y[..., 2:4] * 2) ** 2 * self_anchor_grid  # wh
+                     y = torch.cat((xy, wh, y[..., 4:]), -1)
+-                z.append(y.view(bs, -1, self.no))
+-            else:
+-                x[i] = x[i].view(bs, self.na, self.no, ny, nx).permute(0, 1, 3, 4, 2).contiguous()
++                # z.append(y.view(bs, -1, self.no))
++                z.append(y.permute(0, 2, 1, 3))                                      # set abc
++
+ 
+         ### remove unused x to reduce output size
+-        return x if self.training else torch.cat(z, 1)
++        # return x if self.training else torch.cat(z, 1)
++        return z[0], z[1], z[2]                                                       # set abc
+ 
+     def _make_grid(self, nx=20, ny=20, i=0):
+         d = self.anchors[i].device
+         yv, xv = torch.meshgrid([torch.arange(ny).to(d), torch.arange(nx).to(d)])
+-
+-        #>>> lyngor bug, will restore later
+-        xv = xv.reshape(ny, nx, 1)
+-        yv = yv.reshape(ny, nx, 1)
+-        grid = torch.cat((xv, yv), 2).expand((self.na, ny, nx, 2)).float()
+-        #<<< lyngor bug, will restore later
++        grid = torch.stack((xv, yv), 2).expand((self.na, ny, nx, 2)).float()          # 5D -> 4D
+         anchor_grid = (self.anchors[i].clone() * self.stride[i]) \
+-            .view((self.na, 1, 1, 2)).expand((self.na, ny, nx, 2)).float()
++            .view((self.na, 1, 1, 2)).expand((self.na, ny, nx, 2)).float()            # 5D -> 4D
+ 
+         return grid, anchor_grid
+ 
+-- 
+2.7.4
+
