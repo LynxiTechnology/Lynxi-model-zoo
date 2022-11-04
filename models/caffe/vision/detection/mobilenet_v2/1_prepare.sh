@@ -11,8 +11,8 @@ if [ ! -d "$source_dir" ]; then
     git clone $source_url
     cd $source_dir
 
-    # fix bug #88
-    git pull origin pull/88/head
+    # apply patch 
+    git apply --reject ../patch/*.patch
 fi
 
 # caffe requirements.txt 
@@ -24,7 +24,3 @@ cd $golden_dir && python3 generate.py $model_file $model_weights $input_shapes
 
 # print original result
 cd $source_dir && python3 eval_image.py --proto $model_file --model $model_weights --image cat.jpg
-
-# apply patch
-git am ../patch/*.patch
-cd $cur_dir
