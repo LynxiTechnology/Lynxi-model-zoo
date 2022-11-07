@@ -22,7 +22,7 @@
 ```
 
 ## 注意事项
-   1. 执行 2_convert.sh 需安装 lyngor，推荐使用 lyngor1.0.6.0 版本
+   1. 执行 2_convert.sh 需安装 lyngor，推荐使用 lyngor1.5.0及以上版本及driver+sdk1.6.0及以上版本
    2. 第1张推理速度不代表最终推理速度
    3. 默认已装好 python 的 caffe 环境并导入
 

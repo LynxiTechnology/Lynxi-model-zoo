@@ -19,5 +19,5 @@ net.blobs['data'].data[...] = input_data
 
 out = net.forward()['prob']
 
-input_data.tofile('input.bin')
-out.tofile('output.bin')   
+input_data.transpose(0,2,3,1).astype("float16").tofile('input.bin')
+out.astype("float16").tofile('output.bin')   
