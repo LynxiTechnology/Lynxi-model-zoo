@@ -1,0 +1,316 @@
+From 31f350ff334802333d663d9cbdc25886cc439dd9 Mon Sep 17 00:00:00 2001
+From: "zhou.zhou" <zhou.zhou@lynxi.com>
+Date: Tue, 15 Nov 2022 18:05:19 +0800
+Subject: [PATCH] modify and test lynxi model
+
+---
+ blocks.py                 |   3 +-
+ eval_sarn_se.py           |   3 +-
+ eval_sarn_se_bam.py       |  22 ++++++----
+ eval_sarn_se_bam_lynxi.py | 110 ++++++++++++++++++++++++++++++++++++++++++++++
+ eval_sarn_se_lynxi.py     |  92 ++++++++++++++++++++++++++++++++++++++
+ 5 files changed, 220 insertions(+), 10 deletions(-)
+ create mode 100644 eval_sarn_se_bam_lynxi.py
+ create mode 100644 eval_sarn_se_lynxi.py
+
+diff --git a/blocks.py b/blocks.py
+index 595d55e..4871a8d 100644
+--- a/blocks.py
++++ b/blocks.py
+@@ -26,7 +26,8 @@ class ChannelGate(nn.Module):
+             self.gate_c.add_module( 'gate_c_relu_%d'%(i+1), nn.ReLU() )
+         self.gate_c.add_module( 'gate_c_fc_final', nn.Linear(gate_channels[-2], gate_channels[-1]) )
+     def forward(self, in_tensor):
+-        avg_pool = F.avg_pool2d( in_tensor, in_tensor.size(2), stride=in_tensor.size(2) )
++        # avg_pool = F.avg_pool2d( in_tensor, in_tensor.size(2), stride=in_tensor.size(2) )
++        avg_pool = F.avg_pool2d( in_tensor, int(in_tensor.size(2)), stride=int(in_tensor.size(2)))   # lynxi -----
+         return self.gate_c( avg_pool ).unsqueeze(2).unsqueeze(3).expand_as(in_tensor)
+ 
+ class SpatialGate(nn.Module):
+diff --git a/eval_sarn_se.py b/eval_sarn_se.py
+index f07d05f..619a104 100644
+--- a/eval_sarn_se.py
++++ b/eval_sarn_se.py
+@@ -58,7 +58,8 @@ def predict(model_path):
+ 
+         input_tensor = torch.from_numpy(test_low_img)
+         input_tensor = input_tensor.unsqueeze(0)
+-        input_tensor = input_tensor.cuda()
++        if args.use_gpu:                               # lynxi -----
++            input_tensor = input_tensor.cuda() 
+ 
+         start_time = time.time()
+         out_tensor = sarn_net(input_tensor)
+diff --git a/eval_sarn_se_bam.py b/eval_sarn_se_bam.py
+index b2cce95..1b09e57 100644
+--- a/eval_sarn_se_bam.py
++++ b/eval_sarn_se_bam.py
+@@ -45,12 +45,14 @@ img_name = os.listdir(low_img_path)
+ 
+ name_list = []
+ 
+-low_data_name = glob.glob(low_img_path)
++# low_data_name = glob.glob(low_img_path)
++low_data_name = glob.glob(low_img_path+"/*")                         # lynxi -----
+ for idx in range(len(low_data_name)-1):
+     name = low_data_name[idx].split('/')[-1]
+     name_list.append(name)
+ 
+-eval_set = TheDataset(phase='eval')
++# eval_set = TheDataset(phase='eval')
++eval_set = TheDataset(phase='eval', route="./data/", patch_size=1)   # lynxi -----
+ 
+ 
+ @torch.no_grad()
+@@ -62,24 +64,28 @@ def predict(model_path):
+         cudnn.benchmark = True
+         cudnn.enabled = True
+ 
+-    sarn_net.load_state_dict(torch.load(model_path))
++    # sarn_net.load_state_dict(torch.load(model_path))
++    sarn_net.load_state_dict(torch.load(model_path, map_location="cpu"))      # lynxi ------
+     sarn_net.to(device)
++    sarn_net.eval()                                                           # lynxi -----
+ 
+     results_list = []
+-    eval_dataloader = DataLoader(eval_set, batch_size=2, shuffle=False,
++    eval_dataloader = DataLoader(eval_set, batch_size=1, shuffle=False,       # lynxi ----- 
+                                  num_workers=0, pin_memory=True, drop_last=True)
+ 
+     for data in tqdm.tqdm(eval_dataloader):
+         low_im, high_im = data
+-        low_im, high_im = low_im.cuda(), high_im.cuda()
++        if args.use_gpu:                                        # lynxi -----
++            low_im, high_im = low_im.cuda(), high_im.cuda()
+ 
+         out = sarn_net(low_im)
+ 
+-        out = out.cuda().data.cpu().numpy()
++        # out = out.cuda().data.cpu().numpy()
++        out = out.data.cpu().numpy()                            # lynxi -----
+         out0 = out[0, :, :, :]
+-        out1 = out[1, :, :, :]
++        # out1 = out[1, :, :, :]
+         results_list.append(out0)
+-        results_list.append(out1)
++        # results_list.append(out1)
+ 
+     for i in range(len(img_name)):
+         cv2.imwrite('./results/{}/{}'.format(dataset, img_name[i]), cv2.cvtColor(results_list[i]*255.0, cv2.COLOR_BGR2RGB))
+diff --git a/eval_sarn_se_bam_lynxi.py b/eval_sarn_se_bam_lynxi.py
+new file mode 100644
+index 0000000..aa6668d
+--- /dev/null
++++ b/eval_sarn_se_bam_lynxi.py
+@@ -0,0 +1,110 @@
++import os
++import torch
++import torch.backends.cudnn as cudnn
++import argparse
++from model import *
++from tqdm import tqdm
++import glob
++import cv2
++import tqdm
++from torch.utils.data import DataLoader
++from dataset_lol import TheDataset
++
++
++dataset = 'lol'  # lol_real/lol_synthetic/DICM/LIME/MEF/NPE/Your own images
++
++os.environ["CUDA_VISIBLE_DEVICES"] = "3"
++
++
++device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
++print(f"Use Device: {device}")
++
++
++parser = argparse.ArgumentParser(description='RetinexNet args setting')
++parser.add_argument('--use_gpu', dest='use_gpu', type=int, default=1, help='gpu flag, 1 for GPU and 0 for CPU')
++parser.add_argument('--gpu_idx', dest='gpu_idx', default='3', help='GPU idx')
++parser.add_argument('--checkpoint_dir', dest='ckpt_dir', default='./checkpoint', help='directory for checkpoints')
++parser.add_argument('--save_dir', dest='save_dir', default='./my_results', help='directory for testing outputs')
++parser.add_argument('--test_dir', dest='test_dir', default='./data/my_test', help='directory for testing inputs')
++args = parser.parse_args()
++
++# load lynxi model -----------------------------------------------
++import lynpy, time 
++import numpy as np
++lyn_model = lynpy.Model(path=args.ckpt_dir+"/Net_0", dev_id=0)     
++
++
++psnr_list = []
++ssim_list = []
++vif_list = []
++
++
++# low_img_path = '/home/wxx/code/dataset/Test/{}'.format(dataset)   # lol_real/lol_synthetic/DICM/LIME/MEF/NPE/Your own images
++low_img_path = './data/eval/low'
++
++img_name = os.listdir(low_img_path)
++
++
++name_list = []
++
++# low_data_name = glob.glob(low_img_path)
++low_data_name = glob.glob(low_img_path+"/*")                               # lynxi -----
++for idx in range(len(low_data_name)-1):
++    name = low_data_name[idx].split('/')[-1]
++    name_list.append(name)
++
++# eval_set = TheDataset(phase='eval')
++eval_set = TheDataset(phase='eval', route="./data/", patch_size=1)         # lynxi -----
++
++
++@torch.no_grad()
++def predict(model_path):
++    # sarn_net = SARNet_fuse_se_all_bam()
++
++    # if args.use_gpu:
++    #     sarn_net = sarn_net.cuda()
++    #     cudnn.benchmark = True
++    #     cudnn.enabled = True
++
++    # # sarn_net.load_state_dict(torch.load(model_path))
++    # sarn_net.load_state_dict(torch.load(model_path, map_location="cpu"))      # lynxi ------    
++    # sarn_net.to(device)
++    # sarn_net.eval()                                                           # lynxi -----                         
++
++    results_list = []
++    eval_dataloader = DataLoader(eval_set, batch_size=1, shuffle=False,         # lynxi ----- 
++                                 num_workers=0, pin_memory=True, drop_last=True)
++
++    for data in tqdm.tqdm(eval_dataloader):
++        low_im, high_im = data
++        if args.use_gpu:                                        # lynxi -----
++            low_im, high_im = low_im.cuda(), high_im.cuda()
++
++        # out = sarn_net(low_im)                                # pytorch inference 
++        input_data = low_im.numpy().astype("float16")
++        tt3 = time.time()
++        input = lyn_model.input_tensor().from_numpy(input_data).apu()
++        lyn_model(input)
++        apu = lyn_model.output_list()[0][0].cpu().numpy()
++        tt4 = time.time() - tt3
++        print(f" ### [SDK][model2] cost time is {tt4:.4f}s, {1/tt4:.1f}fps")
++        out = torch.from_numpy(apu).float()       
++
++        # out = out.cuda().data.cpu().numpy()
++        out = out.data.cpu().numpy()                            # lynxi -----
++        out0 = out[0, :, :, :]
++        # out1 = out[1, :, :, :]
++        results_list.append(out0)
++        # results_list.append(out1)
++
++    for i in range(len(img_name)):
++        cv2.imwrite('./results/{}/{}'.format(dataset, img_name[i][:-4]+"_model_2.png"), cv2.cvtColor(results_list[i]*255.0, cv2.COLOR_BGR2RGB))  
++
++    print('finished')
++
++
++
++if __name__ == '__main__':
++
++    predict(model_path='./checkpoint/sarn_fuse_se_all_bam.pth')
++
+diff --git a/eval_sarn_se_lynxi.py b/eval_sarn_se_lynxi.py
+new file mode 100644
+index 0000000..2f3e937
+--- /dev/null
++++ b/eval_sarn_se_lynxi.py
+@@ -0,0 +1,92 @@
++import os
++import torch
++import torch.backends.cudnn as cudnn
++import numpy as np
++import argparse
++from model import *
++from tqdm import tqdm
++import cv2
++import time
++
++
++dataset = 'lol'   # lol_real/lol_synthetic/DICM/LIME/MEF/NPE
++
++os.environ["CUDA_VISIBLE_DEVICES"] = "2"
++
++parser = argparse.ArgumentParser(description='RetinexNet args setting')
++parser.add_argument('--use_gpu', dest='use_gpu', type=int, default=1, help='gpu flag, 1 for GPU and 0 for CPU')
++parser.add_argument('--checkpoint_dir', dest='ckpt_dir', default='./checkpoint', help='directory for checkpoints')
++parser.add_argument('--save_dir', dest='save_dir', default='./my_results', help='directory for testing outputs')
++parser.add_argument('--test_dir', dest='test_dir', default='./data/my_test', help='directory for testing inputs')
++args = parser.parse_args()
++
++# load lynxi model -----------------------------------------------
++import lynpy
++lyn_model = lynpy.Model(path=args.ckpt_dir+"/Net_0", dev_id=0)    
++
++psnr_list = []
++ssim_list = []
++vif_list = []
++
++
++# low_img_path = '/home/wxx/code/dataset/Test/{}'.format(dataset)
++low_img_path = './data/eval/low'
++
++
++img_name = os.listdir(low_img_path)
++
++
++@torch.no_grad()
++def predict(model_path):
++    # sarn_net = SARNet()
++    # sarn_net = SARNet_fuse()
++    # sarn_net = SARNet_fuse_se_all()
++    # sarn_net = SARNet_fuse_se_all_bam()
++
++    # if args.use_gpu:
++    #     sarn_net = sarn_net.cuda()
++    #     cudnn.benchmark = True
++    #     cudnn.enabled = True
++    #     sarn_net.load_state_dict(torch.load(model_path))
++    # else:
++    #     sarn_net.load_state_dict(torch.load(model_path, map_location='cpu'))
++
++
++    for name in tqdm(img_name):
++        test_low_img = cv2.imread(os.path.join(low_img_path, name))
++        test_low_img = np.array(test_low_img, dtype="float32") / 255.0
++
++        input_tensor = torch.from_numpy(test_low_img)
++        input_tensor = input_tensor.unsqueeze(0)
++        if args.use_gpu:                                           # lynxi -----
++            input_tensor = input_tensor.cuda()     
++
++        input_data = input_tensor.numpy().astype("float16")        # lynxi -----
++        start_time = time.time()
++        # out_tensor = sarn_net(input_tensor)                      # pytorch inference  
++        input = lyn_model.input_tensor().from_numpy(input_data).apu()
++        lyn_model(input)
++        apu = lyn_model.output_list()[0][0].cpu().numpy()
++        tt = time.time() - start_time
++        print(f" ### [SDK][model1] cost time is {tt:.4f}s, {1/tt:.1f}fps")
++        out_tensor = torch.from_numpy(apu).float()                 # lynxi -----
++
++        out_tensor = out_tensor.squeeze(0)
++        out = out_tensor.cpu().numpy()
++        out = out*255.0
++
++        w, h, _ = test_low_img.shape
++
++        r_low_l_delta = cv2.resize(out, (h, w))
++
++        assert r_low_l_delta.shape == test_low_img.shape
++
++        cv2.imwrite('./results/{}/{}'.format(dataset, name[:-4]+"_model_1.png"), r_low_l_delta)
++
++    print('finished')
++
++
++
++if __name__ == '__main__':
++
++    predict(model_path='./checkpoint/sarn_fuse_se_all.pth')
+-- 
+2.7.4
+
