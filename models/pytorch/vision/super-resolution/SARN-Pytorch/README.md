@@ -2,15 +2,15 @@
    模型来源：https://github.com/weixinxu666/SARN
 
 
-## support model shape and modle (plan)
-- [x] 128x128  sarn_fuse_se_all.pth 和 sarn_fuse_se_all_bam.pth
-- [ ] 256x256  sarn_fuse_se_all.pth 和 sarn_fuse_se_all_bam.pth
-- [ ] 512x512  sarn_fuse_se_all.pth 和 sarn_fuse_se_all_bam.pth
+## support model shape and model type (plan)
+- [x] 128x128   sarn_fuse_se_all.pth 和 sarn_fuse_se_all_bam.pth
+- [ ] 256x256   sarn_fuse_se_all.pth 和 sarn_fuse_se_all_bam.pth
+- [ ] 512x512   sarn_fuse_se_all.pth 和 sarn_fuse_se_all_bam.pth
 
 
 ## 用法
    1. 有需要可以调整setting.cfg的配置，然后运行以下脚本
-   2. 如果 1_prepare 代码无法下载，可以提前下载到本目录
+   2. 如果 1_prepare 代码无法下载，可以提前下载到本目录，同时将判断去掉
    3. 依次执行如下脚本
    ```shell
       1_prepare.sh
