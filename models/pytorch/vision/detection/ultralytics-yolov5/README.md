@@ -1,6 +1,6 @@
 # ultralytics-yolov5
-   模型来源：https://github.com/ultralytics/yolov5/
-   发行版本：6.0
+   1. 模型来源：https://github.com/ultralytics/yolov5/
+   2. 发行版本：6.0
 
 
 ## 支持列表
@@ -21,6 +21,7 @@
       4_detect.sh
    ```
 
+
 ## 注意事项
-   1. 推荐使用lyngor1.5.0（20221017及以后版本）及sdk1.5.1（20221015及以后版本）
-   2. 本案例使用python api，推理速度不是最终模型能力，建议使用c++ api测试
+   1. 推荐使用 lyngor1.6.0（20221103及以上版本）及 sdk1.6.0
+   2. 本案例使用 python api，推理速度不是最终模型能力，建议使用 c++ api 测试
