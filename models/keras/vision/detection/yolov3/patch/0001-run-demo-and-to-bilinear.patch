@@ -1,0 +1,71 @@
+From 4a3c09fbccaae346aad4783e5cf75aa0945e5e24 Mon Sep 17 00:00:00 2001
+From: "zhou.zhou" <zhou.zhou@lynxi.com>
+Date: Tue, 22 Nov 2022 16:28:58 +0800
+Subject: [PATCH] run demo and to bilinear
+
+---
+ convert.py    |  3 ++-
+ yolo_video.py | 30 +++++++++++++++++++++---------
+ 2 files changed, 23 insertions(+), 10 deletions(-)
+
+diff --git a/convert.py b/convert.py
+index 8723e66..82e087b 100644
+--- a/convert.py
++++ b/convert.py
+@@ -219,7 +219,8 @@ def _main(args):
+         elif section.startswith('upsample'):
+             stride = int(cfg_parser[section]['stride'])
+             assert stride == 2, 'Only stride=2 supported.'
+-            all_layers.append(UpSampling2D(stride)(prev_layer))
++            # all_layers.append(UpSampling2D(stride)(prev_layer))
++            all_layers.append(UpSampling2D(stride, interpolation='bilinear')(prev_layer)) # lynxi ---
+             prev_layer = all_layers[-1]
+ 
+         elif section.startswith('yolo'):
+diff --git a/yolo_video.py b/yolo_video.py
+index 7c39461..25ce029 100644
+--- a/yolo_video.py
++++ b/yolo_video.py
+@@ -2,18 +2,30 @@ import sys
+ import argparse
+ from yolo import YOLO, detect_video
+ from PIL import Image
++import os                                          # lynxi ---
+ 
+ def detect_img(yolo):
+-    while True:
+-        img = input('Input image filename:')
+-        try:
+-            image = Image.open(img)
+-        except:
+-            print('Open Error! Try again!')
+-            continue
+-        else:
++    # while True:
++    #     img = input('Input image filename:')
++    #     try:
++    #         image = Image.open(img)
++    #     except:
++    #         print('Open Error! Try again!')
++    #         continue
++    #     else:
++    #         r_image = yolo.detect_image(image)
++    #         r_image.show()
++    if os.path.isdir(FLAGS.input):                # lynxi ---        
++        file_list = os.listdir(FLAGS.input)
++        for filename in file_list:
++            img_path = os.path.join(FLAGS.input, filename)
++            image = Image.open(img_path)
+             r_image = yolo.detect_image(image)
+-            r_image.show()
++            r_image.save(os.path.join(FLAGS.output, filename))
++    else:
++        image = Image.open(FLAGS.input)
++        r_image = yolo.detect_image(image)
++        r_image.save(FLAGS.output)    
+     yolo.close_session()
+ 
+ FLAGS = None
+-- 
+2.7.4
+

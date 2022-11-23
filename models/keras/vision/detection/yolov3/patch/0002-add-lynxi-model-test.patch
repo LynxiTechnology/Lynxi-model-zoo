@@ -1,0 +1,61 @@
+From 671c0668141afa1124be459c3fdda7447fe01da9 Mon Sep 17 00:00:00 2001
+From: "zhou.zhou" <zhou.zhou@lynxi.com>
+Date: Tue, 22 Nov 2022 17:02:40 +0800
+Subject: [PATCH] add lynxi model test
+
+---
+ yolo.py | 31 ++++++++++++++++++++++++-------
+ 1 file changed, 24 insertions(+), 7 deletions(-)
+
+diff --git a/yolo.py b/yolo.py
+index 4aa3486..83ca451 100644
+--- a/yolo.py
++++ b/yolo.py
+@@ -18,6 +18,9 @@ from yolo3.utils import letterbox_image
+ import os
+ from keras.utils import multi_gpu_model
+ 
++import lynpy                                                # lynxi -----
++lyn_model = lynpy.Model(path="../convert_out/Net_0")    
++
+ class YOLO(object):
+     _defaults = {
+         "model_path": 'model_data/yolo.h5',
+@@ -116,13 +119,27 @@ class YOLO(object):
+         image_data /= 255.
+         image_data = np.expand_dims(image_data, 0)  # Add batch dimension.
+ 
+-        out_boxes, out_scores, out_classes = self.sess.run(
+-            [self.boxes, self.scores, self.classes],
+-            feed_dict={
+-                self.yolo_model.input: image_data,
+-                self.input_image_shape: [image.size[1], image.size[0]],
+-                K.learning_phase(): 0
+-            })
++        # out_boxes, out_scores, out_classes = self.sess.run(
++        #     [self.boxes, self.scores, self.classes],
++        #     feed_dict={
++        #         self.yolo_model.input: image_data,
++        #         self.input_image_shape: [image.size[1], image.size[0]],
++        #         K.learning_phase(): 0
++        #     })
++        input_data = image_data.astype("float16")   # lynxi ----- 只计算推理，未计算后处理
++        tt1 = timer()
++        input = lyn_model.input_tensor().from_numpy(input_data).apu()
++        lyn_model(input)
++        apu1 = lyn_model.output_list()[0][0].cpu().numpy()
++        apu2 = lyn_model.output_list()[0][1].cpu().numpy()
++        apu3 = lyn_model.output_list()[0][2].cpu().numpy()
++        tt2 = timer() - tt1
++        print(f" ### [SDK] cost time is {tt2:.4f}s, {1/tt2:.1f}fps")
++        pred = [K.cast(apu1, "float32"), K.cast(apu2, "float32"), K.cast(apu3, "float32")]
++        out_boxes, out_scores, out_classes = yolo_eval(pred, self.anchors,  
++                        80, [image.size[1], image.size[0]],
++                        score_threshold=self.score, iou_threshold=self.iou)
++        out_boxes, out_scores, out_classes = K.eval(out_boxes), K.eval(out_scores), K.eval(out_classes)         
+ 
+         print('Found {} boxes for {}'.format(len(out_boxes), 'img'))
+ 
+-- 
+2.7.4
+
