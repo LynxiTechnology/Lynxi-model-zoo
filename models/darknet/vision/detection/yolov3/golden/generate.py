@@ -23,5 +23,5 @@ o2 = tf.keras.backend.flatten(output1)
 golden_output = K.concatenate([o1, o2])
 k_output = K.eval(golden_output)
 
-inputs.tofile('input.bin')
-k_output.tofile('output.bin')
+inputs.astype("float16").tofile('input.bin')
+k_output.astype("float16").tofile('output.bin')
