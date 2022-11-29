@@ -1,0 +1,171 @@
+From 18b913347946c7bc1ac3e09ea1df84373da5c1e6 Mon Sep 17 00:00:00 2001
+From: "zhou.zhou" <zhou.zhou@lynxi.com>
+Date: Fri, 25 Nov 2022 14:30:35 +0800
+Subject: [PATCH] run demo and test
+
+---
+ detect_one.py     |  7 +++--
+ detect_one_abc.py | 93 +++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ utils.py          | 12 ++++---
+ 3 files changed, 105 insertions(+), 7 deletions(-)
+ create mode 100755 detect_one_abc.py
+
+diff --git a/detect_one.py b/detect_one.py
+index 1601b73..9abc6bc 100644
+--- a/detect_one.py
++++ b/detect_one.py
+@@ -11,6 +11,7 @@ def parse_args():
+     parser.add_argument('--classfile', type=str, default='model/coco.names')
+     parser.add_argument('--image', type=str, default='images/dog-cycle-car.png')
+     parser.add_argument('--resolution', type=int, default=416)
++    parser.add_argument('--output', type=str, default='demo.jpg')    # lynxi -----
+ 
+     return parser.parse_args()
+ 
+@@ -52,9 +53,9 @@ def main():
+         cv2.rectangle(img_ori, tuple(pt1), tuple(pt2), color, -1)
+         cv2.putText(img_ori, label, (pt1[0], t_size[1] + 4 + pt1[1]), cv2.FONT_HERSHEY_PLAIN,
+                     cv2.FONT_HERSHEY_PLAIN, 1, 1, 2)
+-    cv2.imshow(args.image, img_ori)
+-    cv2.waitKey()
+-
++    # cv2.imshow(args.image, img_ori)
++    # cv2.waitKey()
++    cv2.imwrite(args.output, img_ori)                   # lynxi -----
+ 
+ if __name__ == '__main__':
+     main()
+diff --git a/detect_one_abc.py b/detect_one_abc.py
+new file mode 100755
+index 0000000..58db7f3
+--- /dev/null
++++ b/detect_one_abc.py
+@@ -0,0 +1,93 @@
++import cv2
++from utils import *
++import argparse
++import os 
++import time 
++
++import os
++os.environ['GLOG_minloglevel'] = '2'       # 关闭caffe日志
++import caffe
++
++is_use_sdk = True   # test lynxi model ---------------------------------------------
++if is_use_sdk:
++    import lynpy
++    lyn_model = lynpy.Model(path="../convert_out/Net_0")
++
++# def compare_result(apu_x, torch_y, flag):
++#     import numpy as np
++#     ret  = np.sqrt( np.sum( (np.float32(apu_x)-np.float32(torch_y))**2)) / np.sqrt( np.sum( np.float32(apu_x)**2 ))
++#     print(f'[compart_result][{flag}] the error value of apu_x and torch_y is: {ret}', '\n', '---'*30)
++
++
++def parse_args():
++    parser = argparse.ArgumentParser('YOLOv3')
++    # parser.add_argument('--prototxt', type=str, default='model/yolov3.prototxt')
++    # parser.add_argument('--caffemodel', type=str, default='model/yolov3.caffemodel')
++    parser.add_argument('--classfile', type=str, default='model/coco.names')
++    parser.add_argument('--image', type=str, default='images/')
++    parser.add_argument('--output', type=str, default='outputs/')
++    parser.add_argument('--resolution', type=int, default=416)
++    return parser.parse_args()
++
++def main():
++    args = parse_args()
++    mapping = get_classname_mapping(args.classfile)                       # 获取类别字典
++    # model = caffe.Net(args.prototxt, args.caffemodel, caffe.TEST)
++
++    img_list = os.listdir(args.image)
++    for pic in img_list:
++        print(f"----- test pic is {pic}")
++        img_ori = cv2.imread(os.path.join(args.image, pic))
++        inp_dim = args.resolution, args.resolution
++        img = img_prepare(img_ori, inp_dim)     
++        # model.blobs['data'].data[:] = img  
++        # output = model.forward()                                         # cpu大概0.3fps
++        if is_use_sdk:
++            input_data = np.ascontiguousarray(img.transpose(1,2,0).astype("float16"))
++            tt1 = time.time()
++            input = lyn_model.input_tensor().from_numpy(input_data).apu()
++            lyn_model(input)
++            apu1 = lyn_model.output_list()[0][0].cpu().numpy()
++            apu2 = lyn_model.output_list()[0][1].cpu().numpy()
++            apu3 = lyn_model.output_list()[0][2].cpu().numpy()
++            tt2 = time.time() - tt1   
++            print(f" ### [APU] cost time is {tt2:.4f}s, {1/tt2:.1f}fps")   
++            # compare_result(apu1, output["layer82-conv"], "test1") 
++            # compare_result(apu2, output["layer94-conv"], "test2") 
++            # compare_result(apu3, output["layer106-conv"], "test3") 
++            output = {}
++            output["layer82-conv"]  = apu1.astype("float32")
++            output["layer94-conv"]  = apu2.astype("float32")
++            output["layer106-conv"] = apu3.astype("float32")
++
++        rects = rects_prepare(output)
++        scaling_factor = min(1, args.resolution / img_ori.shape[1])
++        for pt1, pt2, cls, prob in rects:
++            pt1[0] -= (args.resolution - scaling_factor*img_ori.shape[1])/2
++            pt2[0] -= (args.resolution - scaling_factor*img_ori.shape[1])/2
++            pt1[1] -= (args.resolution - scaling_factor*img_ori.shape[0])/2
++            pt2[1] -= (args.resolution - scaling_factor*img_ori.shape[0])/2
++
++            pt1[0] = np.clip(int(pt1[0] / scaling_factor), a_min=0, a_max=img_ori.shape[1])
++            pt2[0] = np.clip(int(pt2[0] / scaling_factor), a_min=0, a_max=img_ori.shape[1])
++            pt1[1] = np.clip(int(pt1[1] / scaling_factor), a_min=0, a_max=img_ori.shape[1])
++            pt2[1] = np.clip(int(pt2[1] / scaling_factor), a_min=0, a_max=img_ori.shape[1])
++
++            label = "{}:{:.2f}".format(mapping[cls], prob)     
++            print("  ",label)
++            color = tuple(map(int, np.uint8(np.random.uniform(0, 255, 3))))
++
++            cv2.rectangle(img_ori, tuple(pt1), tuple(pt2), color, 1)
++            t_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_PLAIN, 1 , 1)[0]
++            pt2 = pt1[0] + t_size[0] + 3, pt1[1] + t_size[1] + 4
++            cv2.rectangle(img_ori, tuple(pt1), tuple(pt2), color, -1)
++            cv2.putText(img_ori, label, (pt1[0], t_size[1] + 4 + pt1[1]), cv2.FONT_HERSHEY_PLAIN,
++                        cv2.FONT_HERSHEY_PLAIN, 1, 1, 2)
++        # cv2.imshow(args.image, img_ori)
++        # cv2.waitKey(2000)
++        cv2.imwrite("%s/%s"%(args.output, pic), img_ori)                    # save pic 
++    print(f"--- all pic is done ---")
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/utils.py b/utils.py
+index 72128ee..2f05557 100644
+--- a/utils.py
++++ b/utils.py
+@@ -104,11 +104,14 @@ def rects_prepare(output, inp_dim=416, num_classes=80):
+     # transform prediction coordinates to correspond to pixel location
+     for key, value in output.items():
+         # anchor sizes are borrowed from YOLOv3 config file
+-        if key == 'out0': 
++        # if key == 'out0': 
++        if key == 'layer82-conv':                           # lynxi -----
+             anchors = [(116, 90), (156, 198), (373, 326)] 
+-        elif key == 'out1':
++        # elif key == 'out1':                               
++        elif key == 'layer94-conv':                         # lynxi -----
+             anchors = [(30, 61), (62, 45), (59, 119)]
+-        elif key == 'out2': 
++        # elif key == 'out2': 
++        elif key == 'layer106-conv':                        # lynxi -----
+             anchors = [(10, 13), (16, 30), (33, 23)]
+         if prediction is None:
+             prediction = predict_transform(value, anchors=anchors)
+@@ -141,7 +144,8 @@ def rects_prepare(output, inp_dim=416, num_classes=80):
+     while ind < img_result.shape[0]:
+         bbox_cur = np.expand_dims(img_result[ind], 0)
+         ious = bbox_iou(bbox_cur, img_result[(ind+1):])
+-        nms_mask = np.expand_dims(ious < nms_threshold, axis=2)
++        # nms_mask = np.expand_dims(ious < nms_threshold, axis=2)
++        nms_mask = np.expand_dims(ious < nms_threshold, axis=1)   # lynxi -----
+         img_result[(ind+1):] = img_result[(ind+1):] * nms_mask
+         img_result = img_result[np.nonzero(img_result[:, 5])]
+         ind += 1
+-- 
+2.7.4
+
