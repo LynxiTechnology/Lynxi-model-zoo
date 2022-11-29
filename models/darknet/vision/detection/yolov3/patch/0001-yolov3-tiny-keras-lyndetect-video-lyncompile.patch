@@ -37,7 +37,7 @@ index 0000000..2d101f9
 +    #compile
 +    dlmodel = lyn.DLModel()
 +    input_shape = tuple(map(int, args.input_shape.split(",")))
-+    dlmodel.load(args.model_path, model_type='Keras', inputs_dict={'input_1': input_shape})
++    dlmodel.load(args.model_path, model_type='Keras', inputs_dict={'input_1': input_shape},in_type="float16",out_type="float16")
 +    builder = lyn.Builder(target='apu', is_map=True)
 +    #使用 builder()方法编译计算图 graph，并保存。
 +    builder.build(dlmodel.graph, dlmodel.params, out_path=args.output_path)
@@ -123,12 +123,12 @@ index 0000000..e78e906
 +
 +def run_lyn_inference():
 +    lyn_model = lynpy.Model(path=args.model)
-+    lyn_in = lyn_model.input_tensor().from_numpy(image_data).apu()
++    lyn_in = lyn_model.input_tensor().from_numpy(image_data.astype("float16")).apu()
 +    lyn_model(lyn_in)
 +    output0,output1 = lyn_model.output_list()[0]
 +    output0 = output0.cpu().numpy()
 +    output1 = output1.cpu().numpy()
-+    outputs = [K.constant(output0),K.constant(output1)]
++    outputs = [K.cast(output0, "float32"),K.cast(output1, "float32")]
 +
 +    return outputs
 +
