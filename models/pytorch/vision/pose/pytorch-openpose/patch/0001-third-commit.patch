@@ -102,12 +102,12 @@ index 0000000..7c9d2ce
 +            im = np.transpose(np.float32(imageToTest_padded2[:, :, :, np.newaxis]), (3, 2, 0, 1)) / 256 - 0.5
 +            im = np.ascontiguousarray(im)
 +
-+            inputs = self.lynnet.input_tensor().from_numpy(im).apu()
++            inputs = self.lynnet.input_tensor().from_numpy(im.transpose(0,2,3,1).astype("float16")).apu()
 +            self.lynnet(inputs)
 +            result = self.lynnet.output_list()[0]
 +
-+            Mconv7_stage6_L1 = result[0].cpu().numpy()
-+            Mconv7_stage6_L2 = result[1].cpu().numpy()
++            Mconv7_stage6_L1 = result[0].cpu().numpy().astype("float32")  
++            Mconv7_stage6_L2 = result[1].cpu().numpy().astype("float32")  
 +
 +            # data = data.permute([2, 0, 1]).unsqueeze(0).float()
 +            # with torch.no_grad():
@@ -303,10 +303,10 @@ index 0000000..7c9d2ce
 +            elif ff==1:
 +                lynnet=self.lynnet2
 +
-+            inputs = lynnet.input_tensor().from_numpy(im).apu()
++            inputs = lynnet.input_tensor().from_numpy(im.transpose(0,2,3,1).astype("float16")).apu()
 +            lynnet(inputs)
 +            result = lynnet.output_list()[0]
-+            output = result[0].cpu().numpy()
++            output = result[0].cpu().numpy().astype("float32")  
 +
 +            # extract outputs, resize, and remove padding
 +            heatmap = np.transpose(np.squeeze(output), (1, 2, 0))  # output 1 is heatmaps
@@ -464,7 +464,7 @@ index 0000000..f61161d
 +
 +    print("==================apu测试=====================")
 +    #lynpy推理
-+    inputs = lynnet.input_tensor().from_numpy(im).apu()
++    inputs = lynnet.input_tensor().from_numpy(im.transpose(0,2,3,1).astype("float16")).apu()
 +    #循环10次推理，使芯片运算稳定
 +    x=0
 +    while x<10:
@@ -592,7 +592,7 @@ index 0000000..8ce5cb1
 +        elif ff ==1:
 +            lynnet=lynpy.Model(path='hand_368x368_model/Net_0/',dev_id=0)
 +
-+        inputs = lynnet.input_tensor().from_numpy(im).apu()
++        inputs = lynnet.input_tensor().from_numpy(im.transpose(0,2,3,1).astype("float16")).apu()
 +
 +        x=0
 +        while x<10:
@@ -643,7 +643,7 @@ index 0000000..93405ae
 +
 +
 +model = lyn.DLModel()
-+model.load(model_path, model_type='Pytorch', inputs_dict={'input1':input_shape})
++model.load(model_path, model_type='Pytorch', inputs_dict={'input1':input_shape}, in_type="float16", out_type="float16", transpose_axis=[(0,3,1,2)])
 +offline_builder = lyn.Builder(target='apu', is_map=True, chip_num=1)
 +r_engine = offline_builder.build(model.graph, model.params,out_path=compiled_path)
 \ No newline at end of file
@@ -674,7 +674,7 @@ index 0000000..c31b7cc
 +compiled_path="./hand_184x184_model"
 +
 +model = lyn.DLModel()
-+model.load(model_path, model_type='Pytorch', inputs_dict={'input1':input_shape})
++model.load(model_path, model_type='Pytorch', inputs_dict={'input1':input_shape}, in_type="float16", out_type="float16", transpose_axis=[(0,3,1,2)])
 +offline_builder = lyn.Builder(target='apu', is_map=True, chip_num=1)
 +r_engine = offline_builder.build(model.graph, model.params,out_path=compiled_path)
 +
@@ -686,7 +686,7 @@ index 0000000..c31b7cc
 +
 +
 +model = lyn.DLModel()
-+model.load(model_path, model_type='Pytorch', inputs_dict={'input1':input_shape})
++model.load(model_path, model_type='Pytorch', inputs_dict={'input1':input_shape}, in_type="float16", out_type="float16", transpose_axis=[(0,3,1,2)])
 +offline_builder = lyn.Builder(target='apu', is_map=True, chip_num=1)
 +r_engine = offline_builder.build(model.graph, model.params,out_path=compiled_path)
 \ No newline at end of file
