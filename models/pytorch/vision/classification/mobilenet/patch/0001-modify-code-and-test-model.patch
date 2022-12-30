@@ -1,0 +1,138 @@
+From 9ca4b1683989ae3a46c0dcd5ad15fa6a516ddc8e Mon Sep 17 00:00:00 2001
+From: "zhou.zhou" <zhou.zhou@lynxi.com>
+Date: Wed, 28 Dec 2022 09:33:57 +0800
+Subject: [PATCH] modify code and test model
+
+---
+ test.py       |   5 +--
+ test_lynxi.py | 102 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 105 insertions(+), 2 deletions(-)
+ create mode 100755 test_lynxi.py
+
+diff --git a/test.py b/test.py
+index dab61a0..8c074b4 100644
+--- a/test.py
++++ b/test.py
+@@ -38,8 +38,9 @@ if __name__ == '__main__':
+         batch_size=args.b,
+     )
+ 
+-    net.load_state_dict(torch.load(args.weights))
+-    print(net)
++    # net.load_state_dict(torch.load(args.weights))
++    net.load_state_dict(torch.load(args.weights, map_location="cpu"))      # lynxi ------
++    # print(net)
+     net.eval()
+ 
+     correct_1 = 0.0
+diff --git a/test_lynxi.py b/test_lynxi.py
+new file mode 100755
+index 0000000..b4df9af
+--- /dev/null
++++ b/test_lynxi.py
+@@ -0,0 +1,102 @@
++#test.py
++#!/usr/bin/env python3
++
++""" test neuron network performace
++print top1 and top5 err on test dataset
++of a model
++
++author baiyu
++"""
++
++import argparse
++
++from matplotlib import pyplot as plt
++
++import torch
++import torchvision.transforms as transforms
++from torch.utils.data import DataLoader
++
++from conf import settings
++from utils import get_network, get_test_dataloader
++
++is_use_sdk = True     # test lynxi model -----------------------------------
++if is_use_sdk:
++    import lynpy, time 
++    lyn_model = lynpy.Model(path="./convert_out/Net_0", dev_id=0)
++
++    def compare_result(apu_x, torch_y, flag):
++        import numpy as np
++        ret  = np.sqrt( np.sum( (np.float32(apu_x)-np.float32(torch_y))**2)) / np.sqrt( np.sum( np.float32(apu_x)**2 ))
++        print(f'[compart_result][{flag}] the error value of apu_x and torch_y is: {ret}', '\n', '---'*30)
++
++
++if __name__ == '__main__':
++
++    parser = argparse.ArgumentParser()
++    parser.add_argument('-net', type=str, required=True, help='net type')
++    parser.add_argument('-weights', type=str, required=True, help='the weights file you want to test')
++    parser.add_argument('-gpu', action='store_true', default=False, help='use gpu or not')
++    parser.add_argument('-b', type=int, default=16, help='batch size for dataloader')
++    args = parser.parse_args()
++
++    net = get_network(args)
++
++    cifar100_test_loader = get_test_dataloader(
++        settings.CIFAR100_TRAIN_MEAN,
++        settings.CIFAR100_TRAIN_STD,
++        #settings.CIFAR100_PATH,
++        num_workers=4,
++        batch_size=args.b,
++    )
++
++    # net.load_state_dict(torch.load(args.weights))
++    net.load_state_dict(torch.load(args.weights, map_location="cpu"))      # lynxi ------
++    # print(net)
++    net.eval()
++
++    correct_1 = 0.0
++    correct_5 = 0.0
++    total = 0
++
++    with torch.no_grad():
++        for n_iter, (image, label) in enumerate(cifar100_test_loader):
++            print("iteration: {}\ttotal {} iterations".format(n_iter + 1, len(cifar100_test_loader)))
++
++            if args.gpu:
++                image = image.cuda()
++                label = label.cuda()
++                print('GPU INFO.....')
++                print(torch.cuda.memory_summary(), end='')
++
++
++            # output = net(image)
++            if is_use_sdk:
++                input_data = image.numpy().transpose(0,2,3,1).astype("float16")
++                tt1 = time.time()
++                input = lyn_model.input_tensor().from_numpy(input_data).apu()
++                lyn_model(input)
++                apu = lyn_model.output_list()[0][0].cpu().numpy()
++                tt2 = time.time() - tt1 
++                print(f"  ### [SDK] cost time is {tt2:.4f}s, {1/tt2:.1f}fps")
++                # compare_result(apu, output, "test_lynxi")
++                output = torch.from_numpy(apu).float()              # use lynxi model inference -----
++
++            _, pred = output.topk(5, 1, largest=True, sorted=True)
++
++            label = label.view(label.size(0), -1).expand_as(pred)
++            correct = pred.eq(label).float()
++
++            #compute top 5
++            correct_5 += correct[:, :5].sum()
++
++            #compute top1
++            correct_1 += correct[:, :1].sum()
++
++    if args.gpu:
++        print('GPU INFO.....')
++        print(torch.cuda.memory_summary(), end='')
++
++    print()
++    print("Top 1 err: ", 1 - correct_1 / len(cifar100_test_loader.dataset))
++    print("Top 5 err: ", 1 - correct_5 / len(cifar100_test_loader.dataset))
++    print("Parameter numbers: {}".format(sum(p.numel() for p in net.parameters())))
+-- 
+2.7.4
+
